@@ -17,8 +17,16 @@ const loginSchema = Joi.object({
 const pacienteSchema = Joi.object({
   nome: Joi.string().min(2).max(255).required(),
   cpf: Joi.string().pattern(/^\d{3}\.\d{3}\.\d{3}-\d{2}$/).required(),
-  idade: Joi.number().integer().min(1).max(120).required(),
-  escolaridade: Joi.string().valid('Ensino Fundamental', 'Ensino Médio', 'Ensino Superior').required()
+  data_nascimento: Joi.date().optional().allow('', null),
+  numero_laudo: Joi.string().max(50).optional().allow('', null),
+  contexto: Joi.string().valid('Clínico', 'Organizacional', 'Trânsito').optional().allow('', null),
+  tipo_transito: Joi.string().valid('1ª Habilitação', 'Renovação', 'Adição/Mudança de Categoria', 'Curso Escolar', 'Instrutor', 'Segunda via', 'Reincidente', 'EAR - Exerce Atividade Remunerada', 'Cassação', 'Reg. Estrangeiro').optional().allow('', null),
+  escolaridade: Joi.string().valid('E. Fundamental', 'E. Médio', 'E. Superior', 'Pós-Graduação', 'Não Escolarizado').required(),
+  telefone: Joi.string().max(20).optional().allow('', null),
+  email: Joi.string().email().optional().allow('', null),
+  observacoes: Joi.string().max(3000).optional().allow('', null),
+  allow_duplicate_phone: Joi.boolean().optional(),
+  allow_duplicate_email: Joi.boolean().optional()
 });
 
 // Validação de avaliação
@@ -27,8 +35,8 @@ const avaliacaoSchema = Joi.object({
   numero_laudo: Joi.string().min(1).max(20).required(),
   data_aplicacao: Joi.date().required(),
   aplicacao: Joi.string().valid('Coletiva', 'Individual').required(),
-  tipo_habilitacao: Joi.string().valid('1ª Habilitação', 'Renovação/Mudança de categoria', 'Motorista Profissional').required(),
-  observacoes: Joi.string().max(3000).optional()
+  tipo_habilitacao: Joi.string().valid('1ª Habilitação', 'Renovação', 'Adição/Mudança de Categoria', 'Curso Escolar', 'Instrutor', 'Segunda via', 'Reincidente', 'EAR - Exerce Atividade Remunerada', 'Cassação', 'Reg. Estrangeiro', 'Psicológica').required(),
+  observacoes: Joi.string().max(3000).optional().allow('', null)
 });
 
 // Validação de resultados AC

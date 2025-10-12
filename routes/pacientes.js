@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
     const total = parseInt(countResult.rows[0].count);
 
     const dataQuery = `
-      SELECT id, nome, cpf, idade, escolaridade, created_at, updated_at 
+      SELECT id, nome, cpf, idade, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, created_at, updated_at 
       FROM pacientes 
       ${whereClause}
       ORDER BY created_at DESC 
@@ -66,7 +66,7 @@ router.get('/:id', async (req, res) => {
     const { id } = req.params;
 
     const result = await query(
-      'SELECT id, nome, cpf, idade, escolaridade, created_at, updated_at FROM pacientes WHERE id = $1',
+      'SELECT id, nome, cpf, idade, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, created_at, updated_at FROM pacientes WHERE id = $1',
       [id]
     );
 
@@ -90,9 +90,9 @@ router.get('/:id', async (req, res) => {
 // Criar paciente
 router.post('/', validate(pacienteSchema), async (req, res) => {
   try {
-    const { nome, cpf, idade, escolaridade } = req.body;
+    const { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email } = req.body;
 
-    console.log('📝 Dados recebidos:', { nome, cpf, idade, escolaridade });
+    console.log('📝 Dados recebidos:', { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email });
 
     // Verificar se o CPF já existe
     const existingPaciente = await query(
@@ -107,9 +107,112 @@ router.post('/', validate(pacienteSchema), async (req, res) => {
       });
     }
 
+    // Validar formato do número de laudo: LAU-(ano)-xxxx
+    if (numero_laudo) {
+      const laudoRegex = /^LAU-\d{4}-\d{4}$/;
+      if (!laudoRegex.test(numero_laudo)) {
+        return res.status(400).json({
+          error: 'Número de laudo deve seguir o formato LAU-YYYY-XXXX (ex: LAU-2025-1234)'
+        });
+      }
+
+      // Verificar se o número de laudo já existe - NÃO PERMITE DUPLICATAS
+      const existingLaudo = await query(
+        'SELECT id, nome, cpf FROM pacientes WHERE numero_laudo = $1',
+        [numero_laudo]
+      );
+
+      if (existingLaudo.rows.length > 0) {
+        const existing = existingLaudo.rows[0];
+        return res.status(400).json({
+          error: 'Número de laudo já está em uso',
+          details: {
+            existing_patient: {
+              nome: existing.nome,
+              cpf: existing.cpf,
+              numero_laudo: numero_laudo
+            }
+          }
+        });
+      }
+    }
+
+    // Verificar se o telefone já existe - AVISAR MAS PERMITIR
+    if (telefone) {
+      const existingPhone = await query(
+        'SELECT id, nome, cpf, telefone FROM pacientes WHERE telefone = $1',
+        [telefone]
+      );
+
+      if (existingPhone.rows.length > 0 && !req.body.allow_duplicate_phone) {
+        const existing = existingPhone.rows[0];
+        return res.status(400).json({
+          error: 'Telefone já está associado a outro paciente',
+          details: {
+            existing_patient: {
+              nome: existing.nome,
+              cpf: existing.cpf,
+              telefone: existing.telefone
+            }
+          }
+        });
+      }
+    }
+
+    // Verificar se o email já existe - AVISAR MAS PERMITIR
+    if (email) {
+      const existingEmail = await query(
+        'SELECT id, nome, cpf, email FROM pacientes WHERE email = $1',
+        [email]
+      );
+
+      if (existingEmail.rows.length > 0 && !req.body.allow_duplicate_email) {
+        const existing = existingEmail.rows[0];
+        return res.status(400).json({
+          error: 'Email já está associado a outro paciente',
+          details: {
+            existing_patient: {
+              nome: existing.nome,
+              cpf: existing.cpf,
+              email: existing.email
+            }
+          }
+        });
+      }
+    }
+
+    // Verificar se há telefone ou email duplicado para adicionar observação
+    let observacoes = req.body.observacoes || '';
+    
+    if (telefone && req.body.allow_duplicate_phone) {
+      const existingPhone = await query(
+        'SELECT nome FROM pacientes WHERE telefone = $1',
+        [telefone]
+      );
+      if (existingPhone.rows.length > 0) {
+        const existingName = existingPhone.rows[0].nome;
+        observacoes = observacoes ? 
+          `${observacoes}\n\nNúmero de telefone associado a mais pessoas: ${existingName}` :
+          `Número de telefone associado a mais pessoas: ${existingName}`;
+      }
+    }
+
+    if (email && req.body.allow_duplicate_email) {
+      const existingEmail = await query(
+        'SELECT nome FROM pacientes WHERE email = $1',
+        [email]
+      );
+      if (existingEmail.rows.length > 0) {
+        const existingName = existingEmail.rows[0].nome;
+        observacoes = observacoes ? 
+          `${observacoes}\n\nEmail associado a mais pessoas: ${existingName}` :
+          `Email associado a mais pessoas: ${existingName}`;
+      }
+    }
+
     const result = await query(
-      'INSERT INTO pacientes (nome, cpf, idade, escolaridade) VALUES ($1, $2, $3, $4) RETURNING id, nome, cpf, idade, escolaridade, created_at, updated_at',
-      [nome, cpf, idade, escolaridade]
+      'INSERT INTO pacientes (nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes, created_at, updated_at',
+      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes]
     );
 
     res.status(201).json({
@@ -128,7 +231,7 @@ router.post('/', validate(pacienteSchema), async (req, res) => {
 router.put('/:id', validate(pacienteSchema), async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome, cpf, idade, escolaridade } = req.body;
+    const { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes } = req.body;
 
     // Verificar se o paciente existe
     const existingPaciente = await query(
@@ -155,8 +258,8 @@ router.put('/:id', validate(pacienteSchema), async (req, res) => {
     }
 
     const result = await query(
-      'UPDATE pacientes SET nome = $1, cpf = $2, idade = $3, escolaridade = $4, updated_at = CURRENT_TIMESTAMP WHERE id = $5 RETURNING id, nome, cpf, idade, escolaridade, created_at, updated_at',
-      [nome, cpf, idade, escolaridade, id]
+      'UPDATE pacientes SET nome = $1, cpf = $2, data_nascimento = $3, numero_laudo = $4, contexto = $5, tipo_transito = $6, escolaridade = $7, telefone = $8, email = $9, observacoes = $10, updated_at = CURRENT_TIMESTAMP WHERE id = $11 RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes, created_at, updated_at',
+      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes, id]
     );
 
     res.json({
