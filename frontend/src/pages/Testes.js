@@ -1,0 +1,1908 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { useQuery } from 'react-query';
+import { useSearchParams } from 'react-router-dom';
+import { 
+  Brain, 
+  Eye, 
+  Target, 
+  MemoryStick, 
+  Calculator,
+  Navigation,
+  FileText
+} from 'lucide-react';
+import { tabelasService, pacientesService } from '../services/api';
+import LoadingSpinner from '../components/LoadingSpinner';
+
+const Testes = () => {
+  const [searchParams] = useSearchParams();
+  const [selectedTest, setSelectedTest] = useState(null);
+  const [testData, setTestData] = useState({});
+  const [results, setResults] = useState(null);
+  const [analysisType, setAnalysisType] = useState('anonymous');
+  const [patientData, setPatientData] = useState({
+    cpf: '',
+    nome: '',
+    numero_laudo: ''
+  });
+  const [avaliacaoData, setAvaliacaoData] = useState({
+    data_avaliacao: new Date().toISOString().split('T')[0] // Data atual como padrão
+  });
+  const [foundPatient, setFoundPatient] = useState(null);
+  const [searchingPatient, setSearchingPatient] = useState(false);
+  
+  // Estados específicos do MIG: respostas e gabarito
+  const QUESTIONS_COUNT = 28;
+  const [migAnswers, setMigAnswers] = useState(Array(QUESTIONS_COUNT).fill(''));
+  const [migAnswerKey, setMigAnswerKey] = useState(Array(QUESTIONS_COUNT).fill(''));
+
+  const getChoiceClass = (idx, option) => {
+    const user = migAnswers[idx];
+    const key = migAnswerKey[idx];
+    const isSelected = user === option;
+    if (!isSelected) return 'bg-white text-gray-600 border-gray-300 hover:border-gray-400';
+    if (!key) return 'bg-gray-200 text-gray-800 border-gray-400';
+    return user === key
+      ? 'bg-green-600 text-white border-green-700'
+      : 'bg-orange-500 text-white border-orange-600';
+  };
+
+  const getButtonClass = (idx, option) => getChoiceClass(idx, option);
+
+  const chooseOption = (idx, option) => {
+    const next = [...migAnswers];
+    next[idx] = next[idx] === option ? '' : option;
+    setMigAnswers(next);
+  };
+  const [autoCalcFromGabarito, setAutoCalcFromGabarito] = useState(true);
+  // MIG - estados serão recriados no novo layout (remoção do antigo)
+
+  // Estados específicos do MEMORE (crivo): 30 itens total (A-F + 1-24)
+  const MEMORE_TOTAL = 30; // inclui treino A..F (6) + 24 itens
+  
+  // Debug: Verificar se o arquivo está sendo carregado
+  console.log('🔄 Testes.js carregado - Layout MIG e MEMORE atualizados:', new Date().toLocaleTimeString());
+  // Chave fixa do MEMORE (não editável pelo usuário)
+  const memoreKeyVP = (() => {
+    const key = Array(MEMORE_TOTAL).fill(false); // 30 itens: A-F + 1-24
+    // Treino A-F: B, C, E são VP (índices 1, 2, 4)
+    key[1] = true; // B
+    key[2] = true; // C  
+    key[4] = true; // E
+    // Teste 1-24: VP são 2,3,4,6,8,10,12,14,15,18,20,22 (índices 6+1, 6+2, etc.)
+    const vpItems = [2,3,4,6,8,10,12,14,15,18,20,22];
+    vpItems.forEach(item => {
+      key[5 + item] = true; // +5 porque A-F ocupam índices 0-5
+    });
+    return key;
+  })(); // true = VP (deve marcar), false = VN (não deve marcar)
+  const [memoreMarks, setMemoreMarks] = useState(Array(MEMORE_TOTAL).fill(false)); // true = marcou (X)
+  
+  // Estado para tabela normativa selecionada
+  const [selectedTable, setSelectedTable] = useState(null);
+
+  // Contadores ao vivo do MEMORE (não altera campos manuais)
+  const memoreLive = useMemo(() => {
+    if (selectedTest?.id !== 'memore') return null;
+    const vp = memoreMarks.reduce((s, m, i) => s + (i >= 6 && memoreKeyVP[i] && m ? 1 : 0), 0);
+    const vn = memoreMarks.reduce((s, m, i) => s + (i >= 6 && !memoreKeyVP[i] && !m ? 1 : 0), 0);
+    const fn = memoreMarks.reduce((s, m, i) => s + (i >= 6 && memoreKeyVP[i] && !m ? 1 : 0), 0);
+    const fp = memoreMarks.reduce((s, m, i) => s + (i >= 6 && !memoreKeyVP[i] && m ? 1 : 0), 0);
+    const eb = (vp + vn) - (fn + fp);
+    return { vp, vn, fn, fp, eb };
+  }, [memoreMarks, memoreKeyVP, selectedTest?.id]);
+
+  // Auto-sincronizar contadores do crivo com os campos manuais
+  useEffect(() => {
+    if (selectedTest?.id !== 'memore') return;
+    if (!memoreLive) return;
+    
+    // Só atualiza se os valores realmente mudaram
+    setTestData(prev => {
+      const newData = {
+        vp: memoreLive.vp,
+        vn: memoreLive.vn,
+        fn: memoreLive.fn,
+        fp: memoreLive.fp,
+        eb: memoreLive.eb
+      };
+      
+      // Verifica se os valores mudaram para evitar loop infinito
+      if (prev.vp === newData.vp && prev.vn === newData.vn && 
+          prev.fn === newData.fn && prev.fp === newData.fp && 
+          prev.eb === newData.eb) {
+        return prev;
+      }
+      
+      return { ...prev, ...newData };
+    });
+  }, [memoreLive, selectedTest?.id]);
+
+  // Cálculo automático quando campos manuais mudam
+  useEffect(() => {
+    if (selectedTest?.id !== 'memore') return;
+    
+    const vp = Number(testData.vp) || 0;
+    const vn = Number(testData.vn) || 0;
+    const fn = Number(testData.fn) || 0;
+    const fp = Number(testData.fp) || 0;
+    
+    // Calcular EB automaticamente
+    const eb = (vp + vn) - (fn + fp);
+    setTestData(prev => ({ ...prev, eb }));
+  }, [testData.vp, testData.vn, testData.fn, testData.fp, selectedTest?.id]);
+
+  const testes = useMemo(() => [
+    {
+      id: 'ac',
+      nome: 'AC - Atenção Concentrada',
+      descricao: 'Avaliação da capacidade de atenção concentrada',
+      icon: Target,
+      color: 'bg-blue-500',
+      campos: [
+        { nome: 'acertos', tipo: 'number', label: 'Acertos', min: 0, max: 50 },
+        { nome: 'erros', tipo: 'number', label: 'Erros', min: 0, max: 50 },
+        { nome: 'omissoes', tipo: 'number', label: 'Omissões', min: 0, max: 50 },
+        { nome: 'escolaridade', tipo: 'select', label: 'Escolaridade', options: ['Ensino Fundamental', 'Ensino Médio', 'Ensino Superior'] }
+      ]
+    },
+    {
+      id: 'beta-iii',
+      nome: 'BETA-III - Raciocínio Matricial',
+      descricao: 'Avaliação do raciocínio lógico e matricial',
+      icon: Brain,
+      color: 'bg-purple-500',
+      campos: [
+        { nome: 'acertos', tipo: 'number', label: 'Acertos', min: 0, max: 25 }
+      ]
+    },
+    {
+      id: 'bpa2',
+      nome: 'BPA-2 - Atenção',
+      descricao: 'Avaliação das três modalidades de atenção (sustentada, alternada, dividida)',
+      icon: Eye,
+      color: 'bg-green-500',
+      campos: [
+        { nome: 'acertos_sustentada', tipo: 'number', label: 'Acertos - Atenção Sustentada', min: 0, max: 100 },
+        { nome: 'erros_sustentada', tipo: 'number', label: 'Erros - Atenção Sustentada', min: 0, max: 100 },
+        { nome: 'omissoes_sustentada', tipo: 'number', label: 'Omissões - Atenção Sustentada', min: 0, max: 100 },
+        { nome: 'acertos_alternada', tipo: 'number', label: 'Acertos - Atenção Alternada', min: 0, max: 100 },
+        { nome: 'erros_alternada', tipo: 'number', label: 'Erros - Atenção Alternada', min: 0, max: 100 },
+        { nome: 'omissoes_alternada', tipo: 'number', label: 'Omissões - Atenção Alternada', min: 0, max: 100 },
+        { nome: 'acertos_dividida', tipo: 'number', label: 'Acertos - Atenção Dividida', min: 0, max: 100 },
+        { nome: 'erros_dividida', tipo: 'number', label: 'Erros - Atenção Dividida', min: 0, max: 100 },
+        { nome: 'omissoes_dividida', tipo: 'number', label: 'Omissões - Atenção Dividida', min: 0, max: 100 }
+      ]
+    },
+    {
+      id: 'rotas',
+      nome: 'Rotas de Atenção',
+      descricao: 'Avaliação das rotas de atenção',
+      icon: Navigation,
+      color: 'bg-yellow-500',
+      campos: [
+        { nome: 'acertos_rota_a', tipo: 'number', label: 'Acertos - Rota A', min: 0, max: 50 },
+        { nome: 'erros_rota_a', tipo: 'number', label: 'Erros - Rota A', min: 0, max: 50 },
+        { nome: 'omissoes_rota_a', tipo: 'number', label: 'Omissões - Rota A', min: 0, max: 50 },
+        { nome: 'acertos_rota_d', tipo: 'number', label: 'Acertos - Rota D', min: 0, max: 50 },
+        { nome: 'erros_rota_d', tipo: 'number', label: 'Erros - Rota D', min: 0, max: 50 },
+        { nome: 'omissoes_rota_d', tipo: 'number', label: 'Omissões - Rota D', min: 0, max: 50 },
+        { nome: 'acertos_rota_c', tipo: 'number', label: 'Acertos - Rota C', min: 0, max: 50 },
+        { nome: 'erros_rota_c', tipo: 'number', label: 'Erros - Rota C', min: 0, max: 50 },
+        { nome: 'omissoes_rota_c', tipo: 'number', label: 'Omissões - Rota C', min: 0, max: 50 }
+      ]
+    },
+    {
+      id: 'memore',
+      nome: 'Memore - Memória',
+      descricao: 'Avaliação da capacidade de memória',
+      icon: MemoryStick,
+      color: 'bg-pink-500',
+      campos: [
+        { nome: 'vp', tipo: 'number', label: 'Verdadeiros Positivos', min: 0, max: 50 },
+        { nome: 'vn', tipo: 'number', label: 'Verdadeiros Negativos', min: 0, max: 50 },
+        { nome: 'fn', tipo: 'number', label: 'Falsos Negativos', min: 0, max: 50 },
+        { nome: 'fp', tipo: 'number', label: 'Falsos Positivos', min: 0, max: 50 }
+      ]
+    },
+    {
+      id: 'mig',
+      nome: 'MIG - Avaliação Psicológica',
+      descricao: 'Avaliação psicológica geral',
+      icon: Calculator,
+      color: 'bg-indigo-500',
+      campos: [
+        { nome: 'idade', tipo: 'number', label: 'Idade', min: 15, max: 64 },
+        { nome: 'escolaridade', tipo: 'select', label: 'Escolaridade', options: ['Ensino Fundamental', 'Ensino Médio', 'Ensino Superior'] },
+        { nome: 'acertos', tipo: 'number', label: 'Acertos', min: 0, max: 28 }
+      ]
+    },
+    {
+      id: 'mvt',
+      nome: 'MVT - Memória Visual para o Trânsito',
+      descricao: 'Avaliação da memória visual relacionada ao trânsito',
+      icon: Eye,
+      color: 'bg-teal-500',
+      campos: [
+        { nome: 'acertos', tipo: 'number', label: 'Acertos', min: 0, max: 50 },
+        { nome: 'erros', tipo: 'number', label: 'Erros', min: 0, max: 50 },
+        { nome: 'omissao', tipo: 'number', label: 'Omissão', min: 0, max: 50 }
+      ]
+    },
+    {
+      id: 'r1',
+      nome: 'R-1 - Raciocínio',
+      descricao: 'Avaliação do raciocínio geral',
+      icon: Brain,
+      color: 'bg-orange-500',
+      campos: [
+        { nome: 'acertos', tipo: 'number', label: 'Acertos', min: 0, max: 50 }
+      ]
+    },
+    {
+      id: 'palografico',
+      nome: 'Palográfico',
+      descricao: 'Avaliação da personalidade através da escrita',
+      icon: FileText,
+      color: 'bg-gray-500',
+      campos: [
+        { nome: 'produtividade', tipo: 'number', label: 'Produtividade', min: 0, max: 1000 },
+        { nome: 'nor', tipo: 'number', label: 'NOR', min: 0, max: 100, step: 0.01 },
+        { nome: 'distancia_media', tipo: 'number', label: 'Distância Média', min: 0, max: 100, step: 0.01 },
+        { nome: 'media_tamanho_palos', tipo: 'number', label: 'Média Tamanho Palos', min: 0, max: 100, step: 0.01 },
+        { nome: 'impulsividade', tipo: 'number', label: 'Impulsividade', min: 0, max: 100, step: 0.01 },
+        { nome: 'media_distancia_linhas', tipo: 'number', label: 'Média Distância Linhas', min: 0, max: 100, step: 0.01 },
+        { nome: 'media_margem_esquerda', tipo: 'number', label: 'Média Margem Esquerda', min: 0, max: 100, step: 0.01 },
+        { nome: 'media_margem_direita', tipo: 'number', label: 'Média Margem Direita', min: 0, max: 100, step: 0.01 },
+        { nome: 'media_margem_superior', tipo: 'number', label: 'Média Margem Superior', min: 0, max: 100, step: 0.01 },
+        { nome: 'porcentagem_ganchos', tipo: 'number', label: 'Porcentagem Ganchos', min: 0, max: 100, step: 0.01 },
+        { nome: 'media_inclinacao', tipo: 'number', label: 'Média Inclinação', min: 0, max: 100, step: 0.01 },
+        { nome: 'media_direcao_linhas', tipo: 'number', label: 'Média Direção Linhas', min: 0, max: 100, step: 0.01 },
+        { nome: 'total_emotividade', tipo: 'number', label: 'Total Emotividade', min: 0, max: 100 }
+      ]
+    }
+  ], []);
+
+  // Pré-selecionar teste e dados do paciente se vier da URL
+  useEffect(() => {
+    const initializeFromURL = async () => {
+      const testParam = searchParams.get('test');
+      const patientId = searchParams.get('patient_id');
+      const patientName = searchParams.get('patient_name');
+      const patientCpf = searchParams.get('patient_cpf');
+      const analysisTypeParam = searchParams.get('analysis_type');
+      
+      if (testParam) {
+        const test = testes.find(t => t.id === testParam);
+        if (test) {
+          setSelectedTest(test);
+          
+          // Configurar tipo de análise
+          if (analysisTypeParam) {
+            setAnalysisType(analysisTypeParam);
+          }
+          
+          // Se há dados do paciente, configurar
+          if (patientId && patientName && patientCpf) {
+            // Buscar dados completos do paciente
+            try {
+              const response = await pacientesService.list({ search: patientCpf, limit: 1 });
+              const pacientes = response.data.data.pacientes || [];
+              if (pacientes.length > 0) {
+                setFoundPatient(pacientes[0]);
+                setPatientData({
+                  cpf: patientCpf,
+                  nome: patientName,
+                  numero_laudo: `LAU-${new Date().getFullYear()}-${String(pacientes[0].id).padStart(3, '0')}`
+                });
+                // Pré-carregar escolaridade do paciente
+                setTestData(prev => ({
+                  ...prev,
+                  escolaridade: pacientes[0].escolaridade
+                }));
+              } else {
+                // Fallback se não encontrar
+                const patientData = {
+                  id: parseInt(patientId),
+                  nome: patientName,
+                  cpf: patientCpf
+                };
+                setFoundPatient(patientData);
+                setPatientData({
+                  cpf: patientCpf,
+                  nome: patientName,
+                  numero_laudo: ''
+                });
+              }
+            } catch (error) {
+              console.error('Erro ao buscar dados completos do paciente:', error);
+              // Fallback se der erro
+              const patientData = {
+                id: parseInt(patientId),
+                nome: patientName,
+                cpf: patientCpf
+              };
+              setFoundPatient(patientData);
+              setPatientData({
+                cpf: patientCpf,
+                nome: patientName,
+                numero_laudo: ''
+              });
+            }
+          }
+        }
+      }
+    };
+
+    initializeFromURL();
+  }, [searchParams, testes]);
+
+  const { data: tabelasNormativas, isLoading } = useQuery(
+    'tabelas-normativas',
+    () => tabelasService.list(),
+    {
+      select: (data) => data.data.tabelas?.filter(tabela => 
+        tabela.tipo === 'bpa2' || tabela.tipo === 'rotas' || tabela.tipo === 'mig' || tabela.tipo === 'memore'
+      ) || []
+    }
+  );
+
+  // Sugerir tabela automaticamente quando paciente é encontrado
+  useEffect(() => {
+    if ((selectedTest?.id === 'bpa2' || selectedTest?.id === 'rotas' || selectedTest?.id === 'mig' || selectedTest?.id === 'memore') && foundPatient && tabelasNormativas && !selectedTable) {
+      const tabelaSugerida = sugerirTabela(foundPatient, tabelasNormativas, selectedTest?.id);
+      if (tabelaSugerida) {
+        setSelectedTable(tabelaSugerida);
+      }
+    }
+  }, [foundPatient, tabelasNormativas, selectedTest, selectedTable]);
+
+  // Para MEMORE, definir tabela padrão quando o teste é selecionado
+  useEffect(() => {
+    if (selectedTest?.id === 'memore' && tabelasNormativas && !selectedTable) {
+      // Tentar encontrar tabela de trânsito por escolaridade primeiro
+      const transitoEscolaridade = tabelasNormativas.find(t => 
+        t.tipo === 'memore' && 
+        (t.nome.includes('Trânsito') || t.nome.includes('transito')) && 
+        t.criterio === 'Escolaridade'
+      );
+      
+      if (transitoEscolaridade) {
+        setSelectedTable(transitoEscolaridade.id);
+      } else {
+        // Fallback: usar qualquer tabela MEMORE disponível
+        const memoreQualquer = tabelasNormativas.find(t => t.tipo === 'memore');
+        if (memoreQualquer) {
+          setSelectedTable(memoreQualquer.id);
+        }
+      }
+    }
+  }, [selectedTest?.id, tabelasNormativas, selectedTable]);
+
+  const handleTestSelect = (teste) => {
+    setSelectedTest(teste);
+    setTestData({});
+    setResults(null);
+    setSelectedTable(null); // Reset da tabela selecionada
+    setAnalysisType('anonymous');
+    setPatientData({ cpf: '', nome: '', numero_laudo: '' });
+    setFoundPatient(null);
+    setSearchingPatient(false);
+    // Reset estados MIG
+    setMigAnswers(Array(QUESTIONS_COUNT).fill(''));
+    setMigAnswerKey(Array(QUESTIONS_COUNT).fill(''));
+    setAutoCalcFromGabarito(true);
+  };
+
+  const handleInputChange = (field, value) => {
+    setTestData({
+      ...testData,
+      [field]: value
+    });
+  };
+
+  const handlePatientDataChange = async (field, value) => {
+    const newPatientData = {
+      ...patientData,
+      [field]: value
+    };
+    setPatientData(newPatientData);
+    
+    // Buscar paciente se pelo menos um campo tem valor
+    if (value.trim() && (newPatientData.cpf || newPatientData.nome || newPatientData.numero_laudo)) {
+      await searchPatient(newPatientData);
+    } else {
+      setFoundPatient(null);
+    }
+  };
+
+  const searchPatient = async (data) => {
+    setSearchingPatient(true);
+    try {
+      // Buscar por CPF
+      if (data.cpf && data.cpf.length >= 11) {
+        const formattedCPF = formatCPF(data.cpf);
+        const response = await pacientesService.list({ search: formattedCPF, limit: 1 });
+        const pacientes = response.data.data.pacientes || [];
+        if (pacientes.length > 0) {
+          setFoundPatient(pacientes[0]);
+          // Pré-carregar todos os dados do paciente
+          setPatientData({
+            cpf: pacientes[0].cpf,
+            nome: pacientes[0].nome,
+            numero_laudo: `LAU-${new Date().getFullYear()}-${String(pacientes[0].id).padStart(3, '0')}`
+          });
+          setTestData(prev => ({
+            ...prev,
+            escolaridade: pacientes[0].escolaridade
+          }));
+          return;
+        }
+      }
+      
+      // Buscar por nome
+      if (data.nome && data.nome.length >= 3) {
+        const response = await pacientesService.list({ search: data.nome, limit: 1 });
+        const pacientes = response.data.data.pacientes || [];
+        if (pacientes.length > 0) {
+          setFoundPatient(pacientes[0]);
+          // Pré-carregar todos os dados do paciente
+          setPatientData({
+            cpf: pacientes[0].cpf,
+            nome: pacientes[0].nome,
+            numero_laudo: `LAU-${new Date().getFullYear()}-${String(pacientes[0].id).padStart(3, '0')}`
+          });
+          setTestData(prev => ({
+            ...prev,
+            escolaridade: pacientes[0].escolaridade
+          }));
+          return;
+        }
+      }
+      
+      setFoundPatient(null);
+    } catch (error) {
+      console.error('Erro ao buscar paciente:', error);
+      setFoundPatient(null);
+    } finally {
+      setSearchingPatient(false);
+    }
+  };
+
+  const formatCPF = (cpf) => {
+    return cpf.replace(/\D/g, '').replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  };
+
+  // Função para sugerir a melhor tabela normativa baseada no paciente
+  const sugerirTabela = (paciente, tabelas, testId) => {
+    if (!paciente || !tabelas) return null;
+    
+    const escolaridade = paciente.escolaridade;
+    
+    // Para MEMORE, priorizar tabelas de trânsito
+    if (testId === 'memore') {
+      // 1. Tentar tabela de trânsito por escolaridade
+      if (escolaridade) {
+        const transitoEscolaridade = tabelas.find(t => 
+          (t.nome.includes('Trânsito') || t.nome.includes('transito') || t.nome.includes('CNH')) && 
+          t.criterio === 'Escolaridade'
+        );
+        if (transitoEscolaridade) return transitoEscolaridade.id;
+      }
+      
+      // 2. Tentar tabela de trânsito por idade
+      const transitoIdade = tabelas.find(t => 
+        (t.nome.includes('Trânsito') || t.nome.includes('transito') || t.nome.includes('CNH')) && 
+        t.criterio === 'Idade'
+      );
+      if (transitoIdade) return transitoIdade.id;
+      
+      // 3. Tentar qualquer tabela de trânsito
+      const transitoQualquer = tabelas.find(t => 
+        t.nome.includes('Trânsito') || t.nome.includes('transito') || t.nome.includes('CNH')
+      );
+      if (transitoQualquer) return transitoQualquer.id;
+      
+      // 4. Fallback: usar tabela MEMORE de Trânsito por nome
+      const memorePadrao = tabelas.find(t => 
+        t.tipo === 'memore' && (t.nome.includes('Trânsito') || t.nome.includes('transito'))
+      );
+      if (memorePadrao) return memorePadrao.id;
+    }
+    
+    // Para outros testes, manter lógica original
+    // Prioridade: São Paulo > Região Sudeste > Brasil
+    // Critério: Escolaridade > Idade
+    
+    // 1. Tentar São Paulo por escolaridade
+    if (escolaridade) {
+      const saoPauloEscolaridade = tabelas.find(t => 
+        t.nome.includes('São Paulo') && 
+        t.criterio === 'Escolaridade'
+      );
+      if (saoPauloEscolaridade) return saoPauloEscolaridade.id;
+    }
+    
+    // 2. Tentar São Paulo por idade
+    const saoPauloIdade = tabelas.find(t => 
+      t.nome.includes('São Paulo') && 
+      t.criterio === 'Idade'
+    );
+    if (saoPauloIdade) return saoPauloIdade.id;
+    
+    // 3. Tentar Região Sudeste por escolaridade
+    if (escolaridade) {
+      const sudesteEscolaridade = tabelas.find(t => 
+        t.nome.includes('Região Sudeste') && 
+        t.criterio === 'Escolaridade'
+      );
+      if (sudesteEscolaridade) return sudesteEscolaridade.id;
+    }
+    
+    // 4. Tentar Região Sudeste por idade
+    const sudesteIdade = tabelas.find(t => 
+      t.nome.includes('Região Sudeste') && 
+      t.criterio === 'Idade'
+    );
+    if (sudesteIdade) return sudesteIdade.id;
+    
+    // 5. Tentar Brasil por escolaridade
+    if (escolaridade) {
+      const brasilEscolaridade = tabelas.find(t => 
+        t.nome.includes('Brasil') && 
+        t.criterio === 'Escolaridade'
+      );
+      if (brasilEscolaridade) return brasilEscolaridade.id;
+    }
+    
+    // 6. Fallback: Brasil por idade
+    const brasilIdade = tabelas.find(t => 
+      t.nome.includes('Brasil') && 
+      t.criterio === 'Idade'
+    );
+    if (brasilIdade) return brasilIdade.id;
+    
+    return null;
+  };
+
+
+  const migCorrectCount = useMemo(() => {
+    if (selectedTest?.id !== 'mig') return 0;
+    return migAnswers.reduce((sum, ans, idx) => {
+      const key = migAnswerKey[idx];
+      if (!ans || !key) return sum;
+      return sum + (ans === key ? 1 : 0);
+    }, 0);
+  }, [migAnswers, migAnswerKey, selectedTest]);
+
+  // Função para determinar a cor do input baseada na resposta
+  // removido - antigo realce de respostas do MIG
+
+  // Função para obter o ícone de status da resposta
+  // removido - antigo ícone de acerto/erro do MIG
+
+
+  // --- Lógica MEMORE ---
+  const toggleMemoreMark = (idx) => {
+    const updated = [...memoreMarks];
+    updated[idx] = !updated[idx];
+    setMemoreMarks(updated);
+    
+    // Calcular automaticamente os contadores quando o crivo é marcado
+    if (selectedTest?.id === 'memore') {
+      const vp = updated.reduce((s, m, i) => s + (i >= 6 && memoreKeyVP[i] && m ? 1 : 0), 0);
+      const vn = updated.reduce((s, m, i) => s + (i >= 6 && !memoreKeyVP[i] && !m ? 1 : 0), 0);
+      const fn = updated.reduce((s, m, i) => s + (i >= 6 && memoreKeyVP[i] && !m ? 1 : 0), 0);
+      const fp = updated.reduce((s, m, i) => s + (i >= 6 && !memoreKeyVP[i] && m ? 1 : 0), 0);
+      const eb = (vp + vn) - (fn + fp);
+      
+      setTestData(prev => ({ ...prev, vp, vn, fn, fp, eb }));
+    }
+  };
+
+
+
+
+
+
+
+  const clearMemoreMarks = () => setMemoreMarks(Array(MEMORE_TOTAL).fill(false));
+
+
+  // Sincroniza "acertos" do MIG com o gabarito
+  useEffect(() => {
+    if (selectedTest?.id === 'mig') {
+      setTestData(prev => ({ ...prev, acertos: migCorrectCount }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [migCorrectCount, selectedTest?.id]);
+
+  // Dispara cálculo automático quando possível
+  useEffect(() => {
+    if (selectedTest?.id !== 'mig' || !autoCalcFromGabarito) return;
+    // Para MIG, só exigimos tabela + idade/escolaridade (tipo_avaliacao não é necessário)
+    const ready = selectedTable && (testData?.idade || foundPatient?.idade) && (testData?.escolaridade || foundPatient?.escolaridade);
+    if (!ready) return;
+
+    const timer = setTimeout(() => {
+      handleCalculate();
+    }, 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [migCorrectCount, selectedTable, testData?.idade, testData?.escolaridade, foundPatient, selectedTest?.id, autoCalcFromGabarito]);
+
+  const handleCalculate = async () => {
+    if (!selectedTest) return;
+
+    try {
+      // Validar seleção de tabela para BPA-2, Rotas, MIG e MEMORE
+      if ((selectedTest.id === 'bpa2' || selectedTest.id === 'rotas' || selectedTest.id === 'mig' || selectedTest.id === 'memore') && !selectedTable) {
+        alert(`Por favor, selecione uma tabela normativa para o ${selectedTest.nome}`);
+        return;
+      }
+      
+      // Priorizar escolaridade do paciente encontrado
+      const escolaridade = foundPatient?.escolaridade || testData.escolaridade;
+      
+      // Converter strings vazias para 0 para campos numéricos
+      const dadosLimpos = {};
+      Object.keys(testData).forEach(key => {
+        const value = testData[key];
+        if (value === '' || value === null || value === undefined) {
+          dadosLimpos[key] = 0;
+        } else {
+          dadosLimpos[key] = isNaN(value) ? value : Number(value);
+        }
+      });
+      
+      const dados = {
+        ...dadosLimpos,
+        escolaridade: escolaridade,
+        // Incluir tabela normativa selecionada para BPA-2, Rotas, MIG e MEMORE
+        ...((selectedTest.id === 'bpa2' || selectedTest.id === 'rotas' || selectedTest.id === 'mig' || selectedTest.id === 'memore') && selectedTable && { tabela_id: selectedTable }),
+        // Incluir dados da avaliação se for vinculada
+        analysisType: analysisType,
+        ...(analysisType === 'linked' && foundPatient && {
+          patientData: {
+            foundPatient: foundPatient,
+            numero_laudo: patientData.numero_laudo,
+            data_avaliacao: avaliacaoData.data_avaliacao
+          }
+        })
+      };
+
+      // Garantir campos do MEMORE sempre presentes como números
+      if (selectedTest.id === 'memore') {
+        dados.vp = Number(dados.vp ?? 0);
+        dados.vn = Number(dados.vn ?? 0);
+        dados.fn = Number(dados.fn ?? 0);
+        dados.fp = Number(dados.fp ?? 0);
+        // Não enviar EB ao backend; ele será calculado lá
+        if ('eb' in dados) delete dados.eb;
+      }
+
+      console.log('🔍 Dados enviados para cálculo:', dados);
+      console.log('🔍 Paciente encontrado:', foundPatient);
+
+      const response = await tabelasService.calculate(selectedTest.id, dados);
+      console.log('🔍 Resposta completa da API:', response);
+      console.log('🔍 Dados dos resultados:', response.data);
+      console.log('🔍 Resultado dentro de data:', response.data?.resultado);
+      setResults(response.data?.resultado || response.data);
+
+      // Se for análise vinculada e encontrou paciente, salvar resultado
+      if (analysisType === 'linked' && foundPatient) {
+        // O backend já salva automaticamente quando analysisType é 'linked'
+        alert('✅ Resultado salvo com sucesso na base de dados!');
+      }
+    } catch (error) {
+      console.error('Erro ao calcular:', error);
+      alert('Erro ao calcular resultado: ' + (error.response?.data?.error || error.message));
+    }
+  };
+
+  if (isLoading) {
+    return <LoadingSpinner />;
+  }
+
+  return (
+    <div className="p-6">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">Testes Psicológicos</h1>
+        <p className="text-gray-600">Selecione um teste para aplicar e calcular resultados</p>
+      </div>
+
+      {!selectedTest ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-fade-in">
+          {testes.map((teste, index) => {
+            const IconComponent = teste.icon;
+            return (
+              <div
+                key={teste.id}
+                onClick={() => handleTestSelect(teste)}
+                style={{ animationDelay: `${index * 0.1}s` }}
+                className="bg-white rounded-xl shadow-soft p-6 cursor-pointer hover:shadow-hover transition-all duration-300 border border-gray-200 hover:border-primary-300 transform hover:scale-105 hover:-translate-y-1 animate-scale-in"
+              >
+                <div className="flex items-center mb-4">
+                  <div className={`p-4 rounded-xl ${teste.color} text-white mr-4 shadow-md group-hover:shadow-lg transition-shadow duration-300`}>
+                    <IconComponent size={28} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900 mb-1">{teste.nome}</h3>
+                    <p className="text-sm text-gray-600">{teste.descricao}</p>
+                  </div>
+                </div>
+                <div className="mt-4 pt-4 border-t border-gray-100">
+                  <span className="text-xs text-primary-600 font-medium hover:text-primary-700">
+                    Clique para aplicar →
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl shadow-soft p-6 animate-slide-in">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center">
+              <div className={`p-4 rounded-xl ${selectedTest.color} text-white mr-4 shadow-md`}>
+                <selectedTest.icon size={32} />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">{selectedTest.nome}</h2>
+                <p className="text-gray-600 mt-1">{selectedTest.descricao}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setSelectedTest(null)}
+              className="px-6 py-3 text-gray-700 hover:text-gray-900 border-2 border-gray-300 rounded-lg hover:bg-gray-50 hover:border-gray-400 transition-all duration-200 font-medium flex items-center gap-2"
+            >
+              ← Voltar
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Tipo de Análise</h3>
+              <div className="space-y-3 mb-6">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="analysisType"
+                    value="anonymous"
+                    checked={analysisType === 'anonymous'}
+                    onChange={(e) => setAnalysisType(e.target.value)}
+                    className="mr-3"
+                  />
+                  <div>
+                    <div className="font-medium">Análise Anônima</div>
+                    <div className="text-sm text-gray-600">Calcular resultado sem vincular a paciente</div>
+                  </div>
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="analysisType"
+                    value="linked"
+                    checked={analysisType === 'linked'}
+                    onChange={(e) => setAnalysisType(e.target.value)}
+                    className="mr-3"
+                  />
+                  <div>
+                    <div className="font-medium">Análise Vinculada</div>
+                    <div className="text-sm text-gray-600">Vincular resultado a um paciente específico</div>
+                  </div>
+                </label>
+              </div>
+
+              {analysisType === 'linked' && (
+                <div className="mb-6">
+                  <h4 className="font-medium text-gray-900 mb-3">Dados do Paciente</h4>
+                  
+                  {foundPatient && searchParams.get('patient_id') && (
+                    <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-md">
+                      <p className="text-sm text-green-800">
+                        <strong>Paciente pré-selecionado da Nova Avaliação.</strong> Os dados já estão configurados.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">CPF</label>
+                      <input
+                        type="text"
+                        value={patientData.cpf}
+                        onChange={(e) => handlePatientDataChange('cpf', e.target.value)}
+                        placeholder="000.000.000-00"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Nome</label>
+                      <input
+                        type="text"
+                        value={patientData.nome}
+                        onChange={(e) => handlePatientDataChange('nome', e.target.value)}
+                        placeholder="Nome completo do paciente"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Número do Laudo</label>
+                      <input
+                        type="text"
+                        value={patientData.numero_laudo}
+                        onChange={(e) => handlePatientDataChange('numero_laudo', e.target.value)}
+                        placeholder="Ex: LAU-2024-001"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Data da Avaliação</label>
+                      <input
+                        type="date"
+                        value={avaliacaoData.data_avaliacao}
+                        onChange={(e) => setAvaliacaoData(prev => ({ ...prev, data_avaliacao: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  {searchingPatient && (
+                    <div className="mt-3 text-sm text-blue-600">Buscando paciente...</div>
+                  )}
+
+                  {foundPatient && (
+                    <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-md">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-medium text-green-800">Paciente encontrado:</h4>
+                          <p className="text-green-700">
+                            <strong>Nome:</strong> {foundPatient.nome} | 
+                            <strong> CPF:</strong> {foundPatient.cpf} | 
+                            <strong> Idade:</strong> {foundPatient.idade} anos | 
+                            <strong> Escolaridade:</strong> {foundPatient.escolaridade}
+                          </p>
+                        </div>
+                        <div className="text-green-600">
+                          <span className="text-lg">✓</span>
+                          <span className="ml-1 text-sm">Vinculado</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Dados do Teste</h3>
+              
+              {(selectedTest.id === 'bpa2' || selectedTest.id === 'rotas' || selectedTest.id === 'memore' || selectedTest.id === 'mig') ? (
+                // Seleção de tabela normativa para BPA-2 e Rotas
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    📊 Tabela Normativa
+                  </label>
+                  <select
+                    value={selectedTable || ''}
+                    onChange={(e) => setSelectedTable(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Selecione uma tabela normativa...</option>
+                    {tabelasNormativas?.filter(tabela => {
+                      if (tabela.tipo !== selectedTest.id) return false;
+                      // Para MEMORE, remover tabela "Memore-Memória" e ordenar de 7 a 10
+                      if (selectedTest.id === 'memore') {
+                        const nome = tabela.nome || '';
+                        // Remover tabela "Memore-Memória"
+                        if (nome.includes('Memore-Memória') || nome.includes('Memória')) return false;
+                        // Manter apenas tabelas 7, 8, 9, 10
+                        return nome.includes('Trânsito') || nome.includes('transito') || 
+                               nome.includes('Escolaridade') || nome.includes('Idade') || 
+                               nome.includes('Geral');
+                      }
+                      return true;
+                    }).sort((a, b) => {
+                      // Ordenar tabelas MEMORE: 7 (Trânsito), 8 (Escolaridade), 9 (Idade), 10 (Geral)
+                      if (selectedTest.id === 'memore') {
+                        const getTableNumber = (nome) => {
+                          if (nome.includes('Trânsito') || nome.includes('transito')) return 7;
+                          if (nome.includes('Escolaridade')) return 8;
+                          if (nome.includes('Idade')) return 9;
+                          if (nome.includes('Geral')) return 10;
+                          return 99;
+                        };
+                        return getTableNumber(a.nome) - getTableNumber(b.nome);
+                      }
+                      return a.nome.localeCompare(b.nome);
+                    }).map((tabela) => (
+                      <option key={tabela.id} value={tabela.id}>
+                        {tabela.nome} {tabela.criterio && `(${tabela.criterio})`} {selectedTest.id === 'memore' ? (() => {
+                          const n = tabela.nome || '';
+                          if (n.includes('Trânsito') || n.includes('transito')) return '— Tabela 7';
+                          if (n.includes('Escolaridade')) return '— Tabela 8';
+                          if (n.includes('Idade')) return '— Tabela 9';
+                          if (n.includes('Geral')) return '— Tabela 10';
+                          return '';
+                        })() : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedTable && (
+                    <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-md">
+                      <p className="text-sm text-green-800 font-medium">
+                        ✅ Tabela selecionada: {(() => {
+                          const tsel = tabelasNormativas?.find(t => t.id === parseInt(selectedTable));
+                          if (!tsel) return '';
+                          const base = tsel.nome;
+                          const sufixo = selectedTest.id === 'memore'
+                            ? (tsel.nome.includes('Trânsito') ? ' — Tabela 7'
+                              : (tsel.nome.includes('Escolaridade') && !tsel.nome.includes('Trânsito') ? ' — Tabela 8'
+                                : (tsel.nome.includes('Idade') ? ' — Tabela 9'
+                                  : (tsel.nome.includes('Geral') ? ' — Tabela 10' : ''))))
+                            : '';
+                          return base + sufixo;
+                        })()}
+                      </p>
+                      {tabelasNormativas?.find(t => t.id === parseInt(selectedTable))?.descricao && (
+                        <p className="text-xs text-green-600 mt-1">
+                          {tabelasNormativas?.find(t => t.id === parseInt(selectedTable))?.descricao}
+                        </p>
+                      )}
+                      {foundPatient && (
+                        <p className="text-xs text-blue-600 mt-1">
+                          🤖 Sugerida automaticamente baseada no paciente encontrado
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {foundPatient && !selectedTable && (
+                    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                      <p className="text-sm text-blue-800 mb-2">
+                        🤖 Sugestão automática disponível baseada no paciente
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const tabelaSugerida = sugerirTabela(foundPatient, tabelasNormativas, selectedTest?.id);
+                          if (tabelaSugerida) {
+                            setSelectedTable(tabelaSugerida);
+                          }
+                        }}
+                        className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
+                      >
+                        Aplicar Sugestão
+                      </button>
+                    </div>
+                  )}
+                  <div className="mt-2 text-xs text-gray-500">
+                    💡 <strong>Recomendação:</strong> Para São Paulo, use as tabelas específicas do estado. 
+                    Para outros estados, use as tabelas da região ou do Brasil.
+                  </div>
+                </div>
+              ) : null}
+              
+              {selectedTest.id === 'bpa2' ? (
+                // Layout especial para BPA-2 com colunas
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {/* Atenção Sustentada */}
+                    <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                      <h4 className="text-lg font-semibold text-blue-800 mb-4 text-center">
+                        Atenção Sustentada
+                      </h4>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Acertos
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.acertos_sustentada || ''}
+                            onChange={(e) => handleInputChange('acertos_sustentada', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Acertos"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Erros
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.erros_sustentada || ''}
+                            onChange={(e) => handleInputChange('erros_sustentada', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Erros"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Omissões
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.omissoes_sustentada || ''}
+                            onChange={(e) => handleInputChange('omissoes_sustentada', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Omissões"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Atenção Alternada */}
+                    <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                      <h4 className="text-lg font-semibold text-green-800 mb-4 text-center">
+                        Atenção Alternada
+                      </h4>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Acertos
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.acertos_alternada || ''}
+                            onChange={(e) => handleInputChange('acertos_alternada', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                            placeholder="Acertos"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Erros
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.erros_alternada || ''}
+                            onChange={(e) => handleInputChange('erros_alternada', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                            placeholder="Erros"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Omissões
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.omissoes_alternada || ''}
+                            onChange={(e) => handleInputChange('omissoes_alternada', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                            placeholder="Omissões"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Atenção Dividida */}
+                    <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                      <h4 className="text-lg font-semibold text-purple-800 mb-4 text-center">
+                        Atenção Dividida
+                      </h4>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Acertos
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.acertos_dividida || ''}
+                            onChange={(e) => handleInputChange('acertos_dividida', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="Acertos"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Erros
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.erros_dividida || ''}
+                            onChange={(e) => handleInputChange('erros_dividida', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="Erros"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Omissões
+                          </label>
+                          <input
+                            type="number"
+                            value={testData.omissoes_dividida || ''}
+                            onChange={(e) => handleInputChange('omissoes_dividida', e.target.value)}
+                            min={0}
+                            max={100}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            placeholder="Omissões"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Resumo da Atenção Geral */}
+                  <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                    <h4 className="text-lg font-semibold text-gray-800 mb-2 text-center">
+                      📊 Atenção Geral (Média das Três Modalidades)
+                    </h4>
+                    <p className="text-sm text-gray-600 text-center">
+                      A atenção geral será calculada automaticamente como a média dos resultados das três modalidades
+                    </p>
+                  </div>
+                </div>
+              ) : selectedTest.id === 'rotas' ? (
+                // Layout especial para Rotas de Atenção - campos organizados por rota
+                <div className="space-y-6">
+                  {/* Rota A - Atenção Alternada */}
+                  <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6">
+                    <div className="text-center mb-4">
+                      <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-2">
+                        <span className="text-white font-bold text-lg">A</span>
+                      </div>
+                      <h4 className="text-lg font-bold text-blue-800">Rota A - Atenção Alternada</h4>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-blue-700 mb-1">
+                          Acertos
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.acertos_rota_a || ''}
+                          onChange={(e) => handleInputChange('acertos_rota_a', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-blue-700 mb-1">
+                          Erros
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.erros_rota_a || ''}
+                          onChange={(e) => handleInputChange('erros_rota_a', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-blue-700 mb-1">
+                          Omissões
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.omissoes_rota_a || ''}
+                          onChange={(e) => handleInputChange('omissoes_rota_a', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Rota D - Atenção Dividida */}
+                  <div className="bg-green-50 border-2 border-green-200 rounded-xl p-6">
+                    <div className="text-center mb-4">
+                      <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-2">
+                        <span className="text-white font-bold text-lg">D</span>
+                      </div>
+                      <h4 className="text-lg font-bold text-green-800">Rota D - Atenção Dividida</h4>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-green-700 mb-1">
+                          Acertos
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.acertos_rota_d || ''}
+                          onChange={(e) => handleInputChange('acertos_rota_d', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-green-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-green-700 mb-1">
+                          Erros
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.erros_rota_d || ''}
+                          onChange={(e) => handleInputChange('erros_rota_d', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-green-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-green-700 mb-1">
+                          Omissões
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.omissoes_rota_d || ''}
+                          onChange={(e) => handleInputChange('omissoes_rota_d', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-green-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Rota C - Atenção Concentrada */}
+                  <div className="bg-purple-50 border-2 border-purple-200 rounded-xl p-6">
+                    <div className="text-center mb-4">
+                      <div className="w-12 h-12 bg-purple-500 rounded-full flex items-center justify-center mx-auto mb-2">
+                        <span className="text-white font-bold text-lg">C</span>
+                      </div>
+                      <h4 className="text-lg font-bold text-purple-800">Rota C - Atenção Concentrada</h4>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-purple-700 mb-1">
+                          Acertos
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.acertos_rota_c || ''}
+                          onChange={(e) => handleInputChange('acertos_rota_c', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-purple-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-purple-700 mb-1">
+                          Erros
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.erros_rota_c || ''}
+                          onChange={(e) => handleInputChange('erros_rota_c', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-purple-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-purple-700 mb-1">
+                          Omissões
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.omissoes_rota_c || ''}
+                          onChange={(e) => handleInputChange('omissoes_rota_c', e.target.value)}
+                          min="0"
+                          max="50"
+                          className="w-full px-3 py-2 border border-purple-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                // Layout padrão para outros testes
+                <div className="space-y-4">
+                  {selectedTest.campos
+                    .filter(campo => {
+                      if (selectedTest.id !== 'mig') return true;
+                      // MIG: quando análise vinculada, esconder Idade/Escolaridade/Acertos (usaremos os dados da pessoa)
+                      if (analysisType === 'linked' && ['idade','escolaridade','acertos'].includes(campo.nome)) return false;
+                      return true;
+                    })
+                    .map((campo) => (
+                    <div key={campo.nome}>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        {campo.label}
+                      </label>
+                      <input
+                        type={campo.tipo}
+                        value={testData[campo.nome] || ''}
+                        onChange={(e) => handleInputChange(campo.nome, e.target.value)}
+                        min={campo.min}
+                        max={campo.max}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+            {/* Botão Calcular Resultado - apenas para testes que não são MEMORE nem MIG */}
+            {selectedTest.id !== 'memore' && selectedTest.id !== 'mig' && (
+              <div className="mt-6">
+                <button
+                  onClick={handleCalculate}
+                  className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-4 px-6 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-semibold shadow-md hover:shadow-lg transform hover:scale-105 flex items-center justify-center gap-2"
+                >
+                  <span>📊</span>
+                  Calcular Resultado
+                </button>
+              </div>
+            )}
+
+            {/* Layout em duas colunas para MEMORE */}
+            {selectedTest.id === 'memore' && (
+              <>
+                <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8 animate-slide-in">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    {/* Coluna Esquerda: Info do Teste */}
+                  <div className="space-y-6">
+                      {/* Header do Teste */}
+                      <div>
+                        <div className="flex items-center gap-3 mb-6">
+                          <div className="w-12 h-12 bg-gradient-to-br from-pink-400 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
+                            <span className="text-2xl">🧠</span>
+                        </div>
+                          <div>
+                            <h3 className="text-2xl font-bold text-gray-900">Memore - Memória</h3>
+                            <p className="text-sm text-gray-600">Avaliação da capacidade de memória</p>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Campos de entrada manual - REMOVIDOS (só mostra contadores automáticos) */}
+                      <div className="hidden grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Verdadeiros Positivos</label>
+                          <input
+                            type="number"
+                            value={testData.vp || ''}
+                            onChange={(e) => setTestData(prev => ({ ...prev, vp: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Verdadeiros Negativos</label>
+                          <input
+                            type="number"
+                            value={testData.vn || ''}
+                            onChange={(e) => setTestData(prev => ({ ...prev, vn: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Falsos Negativos</label>
+                          <input
+                            type="number"
+                            value={testData.fn || ''}
+                            onChange={(e) => setTestData(prev => ({ ...prev, fn: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Falsos Positivos</label>
+                          <input
+                            type="number"
+                            value={testData.fp || ''}
+                            onChange={(e) => setTestData(prev => ({ ...prev, fp: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Coluna Direita: Crivo de Correção */}
+                  <div className="space-y-6">
+                    {/* Seção do Crivo */}
+                    <div className="bg-white rounded-lg border border-gray-200 p-4">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                          <span className="text-xl">🧠</span>
+                          MEMORE - Crivo de Correção
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={clearMemoreMarks}
+                          className="px-5 py-2.5 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2"
+                        >
+                          <span>🗑️</span>
+                          Limpar marcações
+                        </button>
+                      </div>
+
+                      {/* Crivo Visual do MEMORE - Layout de 3 colunas */}
+                      <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3 text-center">Crivo de Correção</h4>
+                        <div className="grid grid-cols-3 gap-4">
+                          {/* Coluna 1: A, B, C, D, E, F, 1, 2, 3, 4 */}
+                          <div className="space-y-1">
+                            {['A', 'B', 'C', 'D', 'E', 'F', '1', '2', '3', '4'].map((label, r) => {
+                              const idx = r; // 0-9: A-F (0-5) + 1-4 (6-9)
+                              const shouldMark = memoreKeyVP[idx];
+                              const isMarked = memoreMarks[idx];
+                              return (
+                                <div key={`mem-row-${idx}`} className="flex items-center gap-2 py-1">
+                                  <span className="text-xs font-medium text-gray-700 w-4">{label}.</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleMemoreMark(idx)}
+                                    className={`w-6 h-6 border-2 rounded flex items-center justify-center text-xs font-bold ${
+                                      isMarked
+                                        ? shouldMark
+                                          ? 'bg-green-500 text-white border-green-500'
+                                          : 'bg-orange-500 text-white border-orange-500'
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                                    } shadow-sm hover:shadow-md transition-all duration-200 hover:scale-110`}
+                                  >
+                                    {isMarked ? '✓' : ''}
+                                  </button>
+                                  <span className={`text-xs font-medium w-8 ${
+                                    shouldMark ? 'text-green-600' : 'text-gray-500'
+                                  }`}>
+                                    {shouldMark ? 'VP' : 'VN'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Coluna 2: 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 */}
+                          <div className="space-y-1">
+                            {['5', '6', '7', '8', '9', '10', '11', '12', '13', '14'].map((label, r) => {
+                              const idx = r + 10; // 10-19
+                              const shouldMark = memoreKeyVP[idx];
+                              const isMarked = memoreMarks[idx];
+                              return (
+                                <div key={`mem-row-${idx}`} className="flex items-center gap-2 py-1">
+                                  <span className="text-xs font-medium text-gray-700 w-4">{label}.</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleMemoreMark(idx)}
+                                    className={`w-6 h-6 border-2 rounded flex items-center justify-center text-xs font-bold ${
+                                      isMarked
+                                        ? shouldMark
+                                          ? 'bg-green-500 text-white border-green-500'
+                                          : 'bg-orange-500 text-white border-orange-500'
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                                    } shadow-sm hover:shadow-md transition-all duration-200 hover:scale-110`}
+                                  >
+                                    {isMarked ? '✓' : ''}
+                                  </button>
+                                  <span className={`text-xs font-medium w-8 ${
+                                    shouldMark ? 'text-green-600' : 'text-gray-500'
+                                  }`}>
+                                    {shouldMark ? 'VP' : 'VN'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Coluna 3: 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 */}
+                          <div className="space-y-1">
+                            {['15', '16', '17', '18', '19', '20', '21', '22', '23', '24'].map((label, r) => {
+                              const idx = r + 20; // 20-29
+                              const shouldMark = memoreKeyVP[idx];
+                              const isMarked = memoreMarks[idx];
+                              return (
+                                <div key={`mem-row-${idx}`} className="flex items-center gap-2 py-1">
+                                  <span className="text-xs font-medium text-gray-700 w-4">{label}.</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleMemoreMark(idx)}
+                                    className={`w-6 h-6 border-2 rounded flex items-center justify-center text-xs font-bold ${
+                                      isMarked
+                                        ? shouldMark
+                                          ? 'bg-green-500 text-white border-green-500'
+                                          : 'bg-orange-500 text-white border-orange-500'
+                                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                                    } shadow-sm hover:shadow-md transition-all duration-200 hover:scale-110`}
+                                  >
+                                    {isMarked ? '✓' : ''}
+                                  </button>
+                                  <span className={`text-xs font-medium w-8 ${
+                                    shouldMark ? 'text-green-600' : 'text-gray-500'
+                                  }`}>
+                                    {shouldMark ? 'VP' : 'VN'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Contadores - Movidos para baixo do crivo */}
+                      <div className="bg-white border-2 border-gray-200 rounded-xl p-6 mt-6">
+                        <div className="text-base font-bold text-gray-800 mb-4">Contadores:</div>
+                        <div className="grid grid-cols-2 gap-4 mb-4">
+                          <div className="bg-gray-50 rounded-lg p-3">
+                            <span className="text-xs text-gray-600 font-medium">VP:</span>
+                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.vp || 0}</span>
+                        </div>
+                          <div className="bg-gray-50 rounded-lg p-3">
+                            <span className="text-xs text-gray-600 font-medium">VN:</span>
+                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.vn || 0}</span>
+                        </div>
+                          <div className="bg-gray-50 rounded-lg p-3">
+                            <span className="text-xs text-gray-600 font-medium">FN:</span>
+                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.fn || 0}</span>
+                      </div>
+                          <div className="bg-gray-50 rounded-lg p-3">
+                            <span className="text-xs text-gray-600 font-medium">FP:</span>
+                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.fp || 0}</span>
+                          </div>
+                        </div>
+                        <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+                          <div className="text-sm font-semibold text-blue-700 mb-1">Resultado (EB):</div>
+                          <div className="text-3xl font-bold text-blue-800">{testData.eb || 0}</div>
+                          <div className="text-xs text-blue-600 mt-1">(VP + VN) - (FN + FP)</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Botões unificados */}
+                <div className="flex justify-center mt-8 gap-3">
+                  <button
+                    onClick={handleCalculate}
+                    className="bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-8 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2"
+                  >
+                    <span>📊</span>
+                    Calcular Resultado
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Layout especial para MIG - Versão 2.0 Modernizada - FORÇA ATUALIZAÇÃO */}
+            {selectedTest.id === 'mig' && (
+              <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8 animate-slide-in col-span-full"  key="mig-v2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Coluna Esquerda: campos/ajustes visuais para alinhamento */}
+                  <div className="md:pr-4">
+                    {/* vazio propositalmente para alinhar com os campos à esquerda do formulário */}
+                  </div>
+
+                  {/* Coluna Direita: Gabarito MIG - Modelo Original */}
+                  <div className="space-y-6">
+                    {/* Gabarito MIG - Layout Original */}
+                    <div className="bg-white rounded-lg border border-gray-200 p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                          <span className="text-xl">📝</span>
+                          Gabarito MIG
+                        </h3>
+                        <div className="flex items-center gap-2"></div>
+                      </div>
+
+                      {/* Gabarito no formato original - 2 colunas */}
+                      <div className="max-h-[70vh] overflow-auto pr-2 space-y-2 md:min-w-[520px] lg:min-w-[600px]">
+                        {/* Cabeçalhos das duas colunas */}
+                        <div className="grid grid-cols-2 gap-3 sticky top-0 bg-white z-10">
+                          {[0,1].map((col) => (
+                            <div key={col} className="text-center">
+                              <div className="grid grid-cols-2 gap-2 text-[11px] font-semibold text-gray-700 border-b pb-1">
+                                <div>Exercício</div>
+                                <div>Alternativa correta</div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3 mt-1">
+                                <div></div>
+                                <div className="grid grid-cols-4 gap-1 text-[10px] text-gray-500">
+                                  <span>A</span><span>B</span><span>C</span><span>D</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Exemplos e Questões */}
+                        <div className="grid grid-cols-2 gap-4">
+                          {/* Coluna Esquerda: Exemplo 1/2 + 1-13 */}
+                          <div className="space-y-1">
+                            {/* Exemplo 1 */}
+                            <div className="grid grid-cols-2 gap-3 py-1 text-[12px]">
+                              <div className="text-center font-medium">Exemplo 1</div>
+                              <div className="flex flex-col items-center">
+                                <div className="grid grid-cols-4 gap-2">
+                                  {['A', 'B', 'C', 'D'].map((option) => (
+                                    <button
+                                      key={option}
+                                      onClick={() => chooseOption(0, option)}
+                                      className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-[11px] font-bold transition-all ${getButtonClass(0, option)}`}
+                                    >
+                                      {option}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
+                                  <span>A</span><span>B</span><span>C</span><span>D</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Exemplo 2 */}
+                            <div className="grid grid-cols-2 gap-3 py-1 text-[12px]">
+                              <div className="text-center font-medium">Exemplo 2</div>
+                              <div className="flex flex-col items-center">
+                                <div className="grid grid-cols-4 gap-2">
+                                  {['A', 'B', 'C', 'D'].map((option) => (
+                                    <button
+                                      key={option}
+                                      onClick={() => chooseOption(1, option)}
+                                      className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-[11px] font-bold transition-all ${getButtonClass(1, option)}`}
+                                    >
+                                      {option}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
+                                  <span>A</span><span>B</span><span>C</span><span>D</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Questões 1-13 */}
+                            {Array.from({ length: 13 }, (_, i) => i + 1).map((questao) => {
+                              const idx = questao + 1; // exemplos ocupam 0 e 1
+                              return (
+                                <div key={questao} className="grid grid-cols-2 gap-3 py-1 text-[12px]">
+                                  <div className="text-center font-medium">{questao}</div>
+                                  <div className="flex flex-col items-center">
+                                    <div className="grid grid-cols-4 gap-2">
+                                      {['A', 'B', 'C', 'D'].map((option) => (
+                                        <button
+                                          key={option}
+                                          onClick={() => chooseOption(idx, option)}
+                                          className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-[11px] font-bold transition-all ${getButtonClass(idx, option)}`}
+                                        >
+                                          {option}
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
+                                      <span>A</span><span>B</span><span>C</span><span>D</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Coluna Direita: 14-28 */}
+                          <div className="space-y-1">
+                            {Array.from({ length: 15 }, (_, i) => i + 14).map((questao) => {
+                              const idx = questao + 1;
+                              return (
+                                <div key={questao} className="grid grid-cols-2 gap-3 py-1 text-[12px]">
+                                  <div className="text-center font-medium">{questao}</div>
+                                  <div className="flex flex-col items-center">
+                                    <div className="grid grid-cols-4 gap-2">
+                                      {['A', 'B', 'C', 'D'].map((option) => (
+                                        <button
+                                          key={option}
+                                          onClick={() => chooseOption(idx, option)}
+                                          className={`w-7 h-7 rounded-full border-2 flex items-center justify-center text-[11px] font-bold transition-all ${getButtonClass(idx, option)}`}
+                                        >
+                                          {option}
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
+                                      <span>A</span><span>B</span><span>C</span><span>D</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Removido bloco visual duplicado abaixo do gabarito para limpar o layout */}
+                    </div>
+                  </div>
+
+                  {/* Resumo dos Acertos */}
+                  <div className="bg-white border-2 border-gray-200 rounded-xl p-6 mt-6">
+                    <div className="text-base font-bold text-gray-800 mb-4">Resumo:</div>
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div className="bg-green-50 rounded-lg p-3 border-2 border-green-200">
+                        <span className="text-xs text-green-700 font-medium">Acertos:</span>
+                        <span className="text-xl font-bold text-green-700 ml-2">{migCorrectCount}</span>
+                        <span className="text-sm text-gray-600"> / 28</span>
+                      </div>
+                      <div className="bg-red-50 rounded-lg p-3 border-2 border-red-200">
+                        <span className="text-xs text-red-700 font-medium">Erros:</span>
+                        <span className="text-xl font-bold text-red-700 ml-2">{28 - migCorrectCount}</span>
+                        <span className="text-sm text-gray-600"> / 28</span>
+                      </div>
+                    </div>
+                    <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+                      <div className="text-xs text-blue-600 mb-1">
+                        💡 {autoCalcFromGabarito ? 'Cálculo automático ativo' : 'Cálculo manual'}
+                      </div>
+                      <div className="text-sm font-semibold text-blue-700">Percentual:</div>
+                      <div className="text-2xl font-bold text-blue-800">{((migCorrectCount / 28) * 100).toFixed(1)}%</div>
+                    </div>
+                  </div>
+
+                  {/* Botão Calcular Resultado - MIG */}
+                  <div className="flex justify-center mt-8 gap-3">
+                    <button
+                      onClick={() => {
+                        setMigAnswers(Array(28).fill(''));
+                        setMigAnswerKey(Array(28).fill(''));
+                      }}
+                      className="px-5 py-3 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2"
+                    >
+                      <span>🗑️</span>
+                      Limpar
+                    </button>
+                    <button
+                      onClick={handleCalculate}
+                      className="bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-8 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2"
+                    >
+                      <span>📊</span>
+                      Calcular Resultado
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {results && Object.keys(results).length > 0 && (
+              <div>
+                <h3 className="text-xl font-bold text-gray-900 mb-6 text-center">📊 Resultados do Teste</h3>
+                
+                {selectedTest.id === 'memore' && (
+                  <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4">🧠 MEMORE - Resultados</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-4">
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <h5 className="font-semibold text-gray-700 mb-2">Contadores</h5>
+                          <div className="space-y-2">
+                            <div className="flex justify-between">
+                              <span>Verdadeiros Positivos (VP):</span>
+                              <span className="font-bold text-green-600">{testData.vp || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Verdadeiros Negativos (VN):</span>
+                              <span className="font-bold text-green-600">{testData.vn || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Falsos Negativos (FN):</span>
+                              <span className="font-bold text-red-600">{testData.fn || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Falsos Positivos (FP):</span>
+                              <span className="font-bold text-red-600">{testData.fp || 0}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-4">
+                        <div className="bg-blue-50 p-4 rounded-lg">
+                          <h5 className="font-semibold text-blue-700 mb-2">Resultado Final</h5>
+                          <div className="text-center">
+                            <div className="text-3xl font-bold text-blue-800 mb-2">{results.resultadoFinal || testData.eb || 0}</div>
+                            <div className="text-sm text-blue-600">Escore Bruto (EB)</div>
+                            <div className="text-xs text-blue-500 mt-1">(VP + VN) - (FN + FP)</div>
+                          </div>
+                        </div>
+                        {results.percentil && (
+                          <div className="bg-green-50 p-4 rounded-lg">
+                            <h5 className="font-semibold text-green-700 mb-2">Classificação</h5>
+                            <div className="text-center">
+                              <div className="text-2xl font-bold text-green-800 mb-1">{results.percentil}º</div>
+                              <div className="text-sm text-green-600">Percentil</div>
+                              <div className="text-lg font-semibold text-green-700 mt-2">{results.classificacao}</div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedTest.id === 'mig' && (
+                  <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4">🧮 MIG - Resultados</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-4">
+                        <div className="bg-gray-50 p-4 rounded-lg">
+                          <h5 className="font-semibold text-gray-700 mb-2">Dados do Teste</h5>
+                          <div className="space-y-2">
+                            <div className="flex justify-between">
+                              <span>Acertos:</span>
+                              <span className="font-bold text-green-600">{testData.acertos || 0}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Total de Questões:</span>
+                              <span className="font-bold text-gray-600">28</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Percentual de Acertos:</span>
+                              <span className="font-bold text-blue-600">{((testData.acertos || 0) / 28 * 100).toFixed(1)}%</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Tipo de Avaliação:</span>
+                              <span className="font-bold text-gray-600">{testData.tipo_avaliacao || 'N/A'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Idade:</span>
+                              <span className="font-bold text-gray-600">{testData.idade || foundPatient?.idade || 'N/A'}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Escolaridade:</span>
+                              <span className="font-bold text-gray-600">{testData.escolaridade || foundPatient?.escolaridade || 'N/A'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-4">
+                        <div className="bg-blue-50 p-4 rounded-lg">
+                          <h5 className="font-semibold text-blue-700 mb-2">Resultado Final</h5>
+                          <div className="text-center">
+                            <div className="text-3xl font-bold text-blue-800 mb-2">{results.resultadoFinal || testData.acertos || 0}</div>
+                            <div className="text-sm text-blue-600">Escore Bruto</div>
+                            <div className="text-xs text-blue-500 mt-1">Acertos / 28</div>
+                          </div>
+                        </div>
+                        {results.percentil && (
+                          <div className="bg-green-50 p-4 rounded-lg">
+                            <h5 className="font-semibold text-green-700 mb-2">Classificação</h5>
+                            <div className="text-center">
+                              <div className="text-2xl font-bold text-green-800 mb-1">{results.percentil}º</div>
+                              <div className="text-sm text-green-600">Percentil</div>
+                              <div className="text-lg font-semibold text-green-700 mt-2">{results.classificacao}</div>
+                            </div>
+              </div>
+            )}
+                        {results.interpretacao && (
+                          <div className="bg-yellow-50 p-4 rounded-lg">
+                            <h5 className="font-semibold text-yellow-700 mb-2">Interpretação</h5>
+                            <div className="text-sm text-yellow-800">{results.interpretacao}</div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default Testes;
+
+
+
