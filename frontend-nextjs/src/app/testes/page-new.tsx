@@ -260,7 +260,9 @@ export default function TestesPage() {
       };
       
       const response = await tabelasService.calculate(selectedTest.id, dataToSend);
-      setResults(response.data);
+      // A API retorna { resultado: {...} }, então pegamos apenas o resultado
+      const resultado = response.data.resultado || response.data;
+      setResults(resultado);
     } catch (error) {
       console.error('Erro ao calcular resultado:', error);
     }
