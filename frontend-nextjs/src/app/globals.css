@@ -55,3 +55,15 @@ body {
 .animate-spin {
   animation: spin 1s linear infinite;
 }
+
+/* Print styles - Hide elements only when printing */
+@media print {
+  .hide-on-print {
+    display: none !important;
+  }
+  
+  /* Hide page header and test selection on print */
+  .print\:hidden {
+    display: none !important;
+  }
+}

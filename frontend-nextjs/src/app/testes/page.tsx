@@ -560,13 +560,13 @@ export default function TestesPage() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="print:hidden">
+        <div className="hide-on-print">
           <h1 className="text-2xl font-bold text-gray-900">Testes Psicológicos</h1>
           <p className="text-gray-600">Selecione e execute testes de avaliação psicológica</p>
         </div>
 
         {/* Test Selection */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 print:hidden">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 hide-on-print">
           {tests.map((test) => {
             const Icon = test.icon;
             return (
@@ -594,7 +594,7 @@ export default function TestesPage() {
         {/* Test Form */}
         {selectedTest && (
           <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
-            <div className="mb-6 print:hidden">
+            <div className="mb-6 hide-on-print">
               <h2 className="text-xl font-bold text-gray-900 mb-2">{selectedTest.nome}</h2>
               <p className="text-gray-600">{selectedTest.descricao}</p>
             </div>
@@ -1025,7 +1025,7 @@ export default function TestesPage() {
                         <button
                           type="button"
                           onClick={clearMemoreMarks}
-                          className="px-5 py-2.5 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2 print:hidden"
+                          className="px-5 py-2.5 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2 hide-on-print"
                         >
                           <span>🗑️</span>
                           Limpar marcações
@@ -1189,7 +1189,7 @@ export default function TestesPage() {
 
                 {/* Botão Imprimir Resultado */}
                 {results && Object.keys(results).length > 0 && (
-                  <div className="flex justify-center mt-8 print:hidden">
+                  <div className="flex justify-center mt-8 hide-on-print">
                     <button
                       onClick={() => window.print()}
                       className="bg-gradient-to-r from-green-600 to-green-700 text-white py-3 px-8 rounded-xl hover:from-green-700 hover:to-green-800 transition-all duration-200 font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2"
