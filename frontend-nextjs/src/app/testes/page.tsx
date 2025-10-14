@@ -560,13 +560,13 @@ export default function TestesPage() {
     <Layout>
       <div className="space-y-6">
         {/* Header */}
-        <div>
+        <div className="print:hidden">
           <h1 className="text-2xl font-bold text-gray-900">Testes Psicológicos</h1>
           <p className="text-gray-600">Selecione e execute testes de avaliação psicológica</p>
         </div>
 
         {/* Test Selection */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 print:hidden">
           {tests.map((test) => {
             const Icon = test.icon;
             return (
@@ -594,7 +594,7 @@ export default function TestesPage() {
         {/* Test Form */}
         {selectedTest && (
           <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
-            <div className="mb-6">
+            <div className="mb-6 print:hidden">
               <h2 className="text-xl font-bold text-gray-900 mb-2">{selectedTest.nome}</h2>
               <p className="text-gray-600">{selectedTest.descricao}</p>
             </div>
@@ -944,10 +944,10 @@ export default function TestesPage() {
             {/* Layout em duas colunas para MEMORE */}
             {selectedTest.id === 'memore' && (
               <>
-                <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8 print:p-0 print:shadow-none print:border-0">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:grid-cols-1">
                   {/* Coluna Esquerda (2/3): Tabela Normativa */}
-                  <div className="lg:col-span-2 space-y-6">
+                  <div className="lg:col-span-2 space-y-6 print:col-span-1">
                     {/* Header do Teste */}
                     <div className="flex items-center gap-3 mb-6">
                       <div className="w-12 h-12 bg-gradient-to-br from-pink-400 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
@@ -960,7 +960,7 @@ export default function TestesPage() {
                     </div>
 
                     {/* Seletor de Tabela Normativa */}
-                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-5">
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-5 print:hidden">
                       <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
                         <span className="text-lg">📊</span>
                         Tabela Normativa
@@ -984,7 +984,7 @@ export default function TestesPage() {
                   </div>
 
                   {/* Coluna Direita (1/3): Entrada Manual - Reduzida 50% */}
-                  <div className="lg:col-span-1">
+                  <div className="lg:col-span-1 print:hidden">
                     <div className="bg-white rounded-lg border border-gray-200 p-2 sticky top-4">
                       <div className="flex items-center gap-1 mb-0.5">
                         <span className="text-sm">🧠</span>
@@ -1014,7 +1014,7 @@ export default function TestesPage() {
                 </div>
 
                   {/* Coluna Direita: Crivo de Correção */}
-                  <div className="space-y-6">
+                  <div className="space-y-6 print:hidden">
                     {/* Seção do Crivo */}
                     <div className="bg-white rounded-lg border border-gray-200 p-4">
                       <div className="flex items-center justify-between mb-4">
@@ -1403,8 +1403,6 @@ export default function TestesPage() {
             {/* Results Display */}
             {results && Object.keys(results).length > 0 && (
               <div className="mt-8">
-                <h3 className="text-xl font-bold text-gray-900 mb-6 text-center">📊 Resultados do Teste</h3>
-                
                 {selectedTest.id === 'mig' && (
                   <div className="bg-white rounded-lg shadow-md p-6 mb-6">
                     <h4 className="text-lg font-semibold text-gray-900 mb-4">🧠 MIG - Resultados da Avaliação</h4>
