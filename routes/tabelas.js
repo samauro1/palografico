@@ -668,7 +668,20 @@ async function calcularRotas(tabelaId, dados) {
 }
 
 async function calcularMIG(tabelaId, dados) {
-  const { tipo_avaliacao, idade, escolaridade, acertos } = dados;
+  const { tipo_avaliacao, idade, escolaridade, acertos: acertosRaw } = dados;
+  
+  // Garantir que acertos seja um número inteiro
+  const acertos = parseInt(acertosRaw);
+  
+  if (isNaN(acertos)) {
+    console.error('❌ MIG: Acertos inválido:', acertosRaw);
+    return { 
+      acertos: 0,
+      percentil: null, 
+      classificacao: 'Fora da faixa normativa',
+      qi: null
+    };
+  }
 
   // Determinar o tipo_avaliacao baseado na tabela selecionada
   let tipoAvaliacao = 'geral'; // padrão
@@ -683,48 +696,87 @@ async function calcularMIG(tabelaId, dados) {
     const nome = tabelaInfo.rows[0].nome;
     
     // Mapear baseado no nome da tabela para maior precisão
-    if (nome.includes('Tabela Geral')) {
+    if (nome.includes('Geral') || nome.includes('Tabela Geral')) {
       tipoAvaliacao = 'geral';
-    } else if (nome.includes('15-25 anos')) {
-      tipoAvaliacao = 'idade_15_25';
-    } else if (nome.includes('26-35 anos')) {
-      tipoAvaliacao = 'idade_26_35';
-    } else if (nome.includes('36-45 anos')) {
-      tipoAvaliacao = 'idade_36_45';
-    } else if (nome.includes('46-55 anos')) {
-      tipoAvaliacao = 'idade_46_55';
-    } else if (nome.includes('56-64 anos')) {
-      tipoAvaliacao = 'idade_56_64';
+    } else if (nome.includes('15-25')) {
+      tipoAvaliacao = 'geral';
+    } else if (nome.includes('26-35')) {
+      tipoAvaliacao = 'geral';
+    } else if (nome.includes('36-45')) {
+      tipoAvaliacao = 'geral';
+    } else if (nome.includes('46-55')) {
+      tipoAvaliacao = 'geral';
+    } else if (nome.includes('56-64')) {
+      tipoAvaliacao = 'geral';
     } else if (nome.includes('Ensino Fundamental')) {
-      tipoAvaliacao = 'escolaridade_fundamental';
+      tipoAvaliacao = 'geral';
     } else if (nome.includes('Ensino Médio')) {
-      tipoAvaliacao = 'escolaridade_medio';
+      tipoAvaliacao = 'geral';
     } else if (nome.includes('Ensino Superior')) {
-      tipoAvaliacao = 'escolaridade_superior';
+      tipoAvaliacao = 'geral';
     } else if (nome.includes('Primeira Habilitação')) {
-      tipoAvaliacao = 'transito_primeira_habilitacao';
-    } else if (nome.includes('Renovação/Mudança')) {
-      tipoAvaliacao = 'transito_renovacao_mudanca';
-    } else if (nome.includes('Motoristas Profissionais')) {
-      tipoAvaliacao = 'transito_motoristas_profissionais';
+      tipoAvaliacao = 'geral';
+    } else if (nome.includes('Renovação') || nome.includes('Mudança')) {
+      tipoAvaliacao = 'geral';
+    } else if (nome.includes('Profissional')) {
+      tipoAvaliacao = 'geral';
     }
   }
 
-  console.log(`🔍 MIG Calculation - Tabela ID: ${tabelaId}, Tipo Avaliação: ${tipoAvaliacao}, Acertos: ${acertos}`);
+  console.log(`🔍 MIG Calculation - Tabela ID: ${tabelaId}, Tipo Avaliação: ${tipoAvaliacao}, Acertos: ${acertos} (tipo: ${typeof acertos})`);
 
+  // Buscar percentil e classificação na tabela selecionada
+  // Se houver múltiplos percentis para o mesmo número de acertos, usar o MAIOR (mais favorável)
   const result = await query(`
     SELECT percentil, classificacao 
     FROM normas_mig 
     WHERE tabela_id = $1 AND tipo_avaliacao = $2 AND $3 BETWEEN acertos_min AND acertos_max
+    ORDER BY percentil DESC
+    LIMIT 1
   `, [tabelaId, tipoAvaliacao, acertos]);
 
+  console.log(`📊 MIG Query Result - Linhas encontradas: ${result.rows.length}`);
+  if (result.rows.length > 0) {
+    console.log(`   Percentil: ${result.rows[0].percentil}, Classificação: ${result.rows[0].classificacao}`);
+  }
+
   if (result.rows.length === 0) {
-    return { percentil: null, classificacao: 'Fora da faixa normativa' };
+    console.error(`❌ MIG: Nenhuma norma encontrada para Tabela ${tabelaId}, Acertos ${acertos}`);
+    return { 
+      acertos,
+      percentil: null, 
+      classificacao: 'Fora da faixa normativa',
+      qi: null
+    };
+  }
+
+  // Buscar QI na tabela de conversão
+  const qiTableResult = await query(`
+    SELECT id FROM tabelas_normativas 
+    WHERE tipo = 'mig' AND nome LIKE '%Conversão QI%' AND ativa = true
+    LIMIT 1
+  `);
+
+  let qi = null;
+  if (qiTableResult.rows.length > 0) {
+    const qiTableId = qiTableResult.rows[0].id;
+    const qiResult = await query(`
+      SELECT qi, classificacao as qi_classificacao
+      FROM normas_mig 
+      WHERE tabela_id = $1 AND tipo_avaliacao = 'qi' AND $2 BETWEEN acertos_min AND acertos_max
+      LIMIT 1
+    `, [qiTableId, acertos]);
+
+    if (qiResult.rows.length > 0) {
+      qi = qiResult.rows[0].qi;
+    }
   }
 
   return {
+    acertos,
     percentil: result.rows[0].percentil,
-    classificacao: result.rows[0].classificacao
+    classificacao: result.rows[0].classificacao,
+    qi
   };
 }
 

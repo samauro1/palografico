@@ -52,8 +52,19 @@ export default function TestesPage() {
 
   // Estados específicos do MIG
   const QUESTIONS_COUNT = 28;
-  const [migAnswers, setMigAnswers] = useState<string[]>(Array(QUESTIONS_COUNT).fill(''));
-  const [migAnswerKey, setMigAnswerKey] = useState<string[]>(Array(QUESTIONS_COUNT).fill(''));
+  const MIG_TOTAL_POSITIONS = 30; // 2 exemplos + 28 questões
+  const [migAnswers, setMigAnswers] = useState<string[]>(Array(MIG_TOTAL_POSITIONS).fill(''));
+  
+  // Gabarito oficial do MIG (inclui 2 exemplos + 28 questões = 30 posições)
+  // Índice 0: Exemplo 1 = B
+  // Índice 1: Exemplo 2 = C
+  // Índices 2-29: Questões 1-28
+  const MIG_ANSWER_KEY = useMemo(() => [
+    'B', 'C', // Exemplos 1 e 2
+    'C', 'D', 'A', 'B', 'C', 'D', 'C', 'B', 'D', 'B', 'C', 'B', 'A', // Questões 1-13
+    'D', 'B', 'B', 'D', 'C', 'A', 'D', 'B', 'D', 'C', 'A', 'A', 'C', 'A', 'B' // Questões 14-28
+  ], []);
+  
   const [autoCalcFromGabarito, setAutoCalcFromGabarito] = useState(true);
 
   // Estados específicos do MEMORE
@@ -77,6 +88,12 @@ export default function TestesPage() {
 
   // Estado para tabela normativa selecionada
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  
+  // Estado específico para tabelas MEMORE
+  const [selectedMemoreTable, setSelectedMemoreTable] = useState<number | null>(null);
+  
+  // Estado específico para tabelas MIG
+  const [selectedMigTable, setSelectedMigTable] = useState<number | null>(null);
 
   // Contadores ao vivo do MEMORE
   const memoreLive = useMemo(() => {
@@ -126,23 +143,65 @@ export default function TestesPage() {
     setTestData(prev => ({ ...prev, eb }));
   }, [testData.vp, testData.vn, testData.fn, testData.fp, selectedTest?.id]);
 
-  // Contador de acertos do MIG
+  // Contador de acertos do MIG (apenas questões 1-28, excluindo exemplos)
   const migCorrectCount = useMemo(() => {
     return migAnswers.reduce((count, answer, idx) => {
-      const key = migAnswerKey[idx];
+      // Pular índices 0 e 1 (Exemplos 1 e 2)
+      if (idx < 2) return count;
+      const key = MIG_ANSWER_KEY[idx];
       return count + (answer && key && answer === key ? 1 : 0);
     }, 0);
-  }, [migAnswers, migAnswerKey]);
+  }, [migAnswers, MIG_ANSWER_KEY]);
+
+  // Cálculo automático do MIG quando acertos_manual ou tabela mudam
+  useEffect(() => {
+    if (selectedTest?.id !== 'mig') return;
+    if (!selectedMigTable) {
+      console.log('⚠️ MIG: Tabela não selecionada');
+      return;
+    }
+    
+    const acertosManual = parseInt(String(testData.acertos_manual || 0));
+    console.log(`🔍 MIG: Acertos manual = ${acertosManual}, Tabela = ${selectedMigTable}`);
+    
+    if (acertosManual <= 0) {
+      // Se não tiver acertos_manual, limpar resultados
+      console.log('⚠️ MIG: Acertos manual <= 0, limpando resultados');
+      setResults(null);
+      return;
+    }
+    
+    // Disparar cálculo automático
+    const calcularAutomatico = async () => {
+      try {
+        console.log(`📤 MIG: Enviando cálculo - Tabela ${selectedMigTable}, Acertos ${acertosManual}`);
+        const dataToSend: any = {
+          tabela_id: selectedMigTable,
+          acertos: acertosManual
+        };
+        
+        const response = await tabelasService.calculate('mig', dataToSend);
+        console.log('📥 MIG: Resposta recebida:', response.data);
+        const resultado = response.data.resultado || response.data || {};
+        console.log('📊 MIG: Resultado processado:', resultado);
+        setResults(resultado as TestResult);
+      } catch (error) {
+        console.error('❌ Erro ao calcular MIG automaticamente:', error);
+      }
+    };
+    
+    calcularAutomatico();
+  }, [testData.acertos_manual, selectedMigTable, selectedTest?.id]);
 
   const getChoiceClass = (idx: number, option: string) => {
     const user = migAnswers[idx];
-    const key = migAnswerKey[idx];
+    const key = MIG_ANSWER_KEY[idx];
     const isSelected = user === option;
     if (!isSelected) return 'bg-white text-gray-600 border-gray-300 hover:border-gray-400';
     if (!key) return 'bg-gray-200 text-gray-800 border-gray-400';
     return user === key
-      ? 'bg-green-600 text-white border-green-700'
-      : 'bg-orange-500 text-white border-orange-600';
+      ? 'bg-green-500 text-white border-green-600 shadow-md'
+      : 'bg-yellow-400 text-gray-800 border-yellow-500 shadow-md';
   };
 
   const getButtonClass = (idx: number, option: string) => getChoiceClass(idx, option);
@@ -174,8 +233,7 @@ export default function TestesPage() {
     setPatientData({ cpf: '', nome: '', numero_laudo: '', data_nascimento: '', contexto: '', tipo_transito: '', telefone: '', email: '' });
     setFoundPatient(null);
     setSearchingPatient(false);
-    setMigAnswers(Array(QUESTIONS_COUNT).fill(''));
-    setMigAnswerKey(Array(QUESTIONS_COUNT).fill(''));
+    setMigAnswers(Array(MIG_TOTAL_POSITIONS).fill(''));
     setAutoCalcFromGabarito(true);
   };
 
@@ -267,23 +325,71 @@ export default function TestesPage() {
     if (!selectedTest) return;
     
     try {
-      const dataToSend = {
+      const dataToSend: any = {
         ...testData,
         ...patientData,
         analysisType,
         selectedTable
       };
       
+      // Se for MEMORE e tiver tabela selecionada, adicionar tabela_id
+      if (selectedTest.id === 'memore' && selectedMemoreTable) {
+        dataToSend.tabela_id = selectedMemoreTable;
+      }
+      
+      // Se for MIG e tiver tabela selecionada, adicionar tabela_id e acertos
+      if (selectedTest.id === 'mig') {
+        if (selectedMigTable) {
+          dataToSend.tabela_id = selectedMigTable;
+        }
+        // Se tiver acertos_manual preenchido, usar ele; senão usar do gabarito
+        const acertosManual = parseInt(String(dataToSend.acertos_manual || 0));
+        dataToSend.acertos = acertosManual > 0 ? acertosManual : migCorrectCount;
+        // Remover acertos_manual do objeto
+        delete dataToSend.acertos_manual;
+      }
+      
       const response = await tabelasService.calculate(selectedTest.id, dataToSend);
       // A API retorna { resultado: {...} }, então pegamos apenas o resultado
-      const resultado = response.data.resultado || response.data;
-      setResults(resultado);
+      const resultado = response.data.resultado || response.data || {};
+      setResults(resultado as TestResult);
     } catch (error) {
       console.error('Erro ao calcular resultado:', error);
     }
   };
 
-  const tests: Test[] = [
+  // Buscar tabelas normativas
+  const { data: tabelasNormativas, isLoading } = useQuery({
+    queryKey: ['tabelas-normativas'],
+    queryFn: () => tabelasService.list(),
+    select: (data: any) => data.data.tabelas?.filter((tabela: any) => 
+      tabela.tipo === 'bpa2' || tabela.tipo === 'rotas' || tabela.tipo === 'mig' || tabela.tipo === 'memore'
+    ) || []
+  });
+
+  // Filtrar apenas tabelas MEMORE
+  const tabelasMemore = useMemo(() => {
+    return tabelasNormativas?.filter((tabela: any) => tabela.tipo === 'memore') || [];
+  }, [tabelasNormativas]);
+
+  // Buscar tabelas normativas do MIG para seleção
+  const { data: tabelasMigData } = useQuery({
+    queryKey: ['mig-tabelas'],
+    queryFn: async () => {
+      const response = await tabelasService.list();
+      // Filtrar apenas tabelas MIG, excluindo a tabela de conversão QI
+      const tabelasMig = response.data.tabelas?.filter((t: any) => 
+        t.tipo === 'mig' && t.nome !== 'MIG - Conversão QI'
+      ) || [];
+      return tabelasMig;
+    },
+    enabled: selectedTest?.id === 'mig'
+  });
+
+  const tabelasMig = tabelasMigData || [];
+
+  // Definir testes
+  const tests: Test[] = useMemo(() => [
     {
       id: 'ac',
       nome: 'AC - Atenção Concentrada',
@@ -357,9 +463,7 @@ export default function TestesPage() {
       descricao: 'Avaliação psicológica geral',
       icon: Calculator,
       campos: [
-        { nome: 'idade', label: 'Idade', tipo: 'number', min: 15, max: 64 },
-        { nome: 'escolaridade', label: 'Escolaridade', tipo: 'select', options: ['Ensino Fundamental', 'Ensino Médio', 'Ensino Superior'] },
-        { nome: 'acertos', label: 'Acertos', tipo: 'number', min: 0, max: 28 }
+        { nome: 'acertos_manual', label: 'Acertos (opcional - preencha OU use o gabarito abaixo)', tipo: 'number', min: 0, max: 28 }
       ]
     },
     {
@@ -403,15 +507,7 @@ export default function TestesPage() {
         { nome: 'total_emotividade', label: 'Total Emotividade', tipo: 'number', min: 0, max: 100 }
       ]
     }
-  ];
-
-  const { data: tabelasNormativas, isLoading } = useQuery({
-    queryKey: ['tabelas-normativas'],
-    queryFn: () => tabelasService.list(),
-    select: (data: any) => data.data.tabelas?.filter((tabela: any) => 
-      tabela.tipo === 'bpa2' || tabela.tipo === 'rotas' || tabela.tipo === 'mig' || tabela.tipo === 'memore'
-    ) || []
-  });
+  ], []);
 
   return (
     <Layout>
@@ -835,6 +931,29 @@ export default function TestesPage() {
                           </div>
                         </div>
                       </div>
+
+                      {/* Seletor de Tabela Normativa */}
+                      <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-4">
+                        <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                          <span className="text-lg">📊</span>
+                          Tabela Normativa
+                        </label>
+                        <select
+                          value={selectedMemoreTable || ''}
+                          onChange={(e) => setSelectedMemoreTable(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white font-medium"
+                        >
+                          <option value="">Selecione a tabela normativa</option>
+                          {tabelasMemore.map((tabela: any) => (
+                            <option key={tabela.id} value={tabela.id}>
+                              {tabela.nome}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-gray-600 mt-2">
+                          ⚠️ Selecione a tabela de acordo com o contexto (trânsito, idade, escolaridade ou geral)
+                        </p>
+                      </div>
                     </div>
                   </div>
 
@@ -1006,26 +1125,44 @@ export default function TestesPage() {
             {/* Layout especial para MIG */}
             {selectedTest.id === 'mig' && (
               <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Coluna Esquerda: campos/ajustes visuais para alinhamento */}
-                  <div className="md:pr-4">
-                    {/* vazio propositalmente para alinhar com os campos à esquerda do formulário */}
-                  </div>
+                {/* Seleção de Tabela Normativa MIG */}
+                <div className="mb-6">
+                  <label className="block text-sm font-semibold text-gray-700 mb-3">
+                    📊 Selecione a Tabela Normativa
+                  </label>
+                  <select
+                    value={selectedMigTable || ''}
+                    onChange={(e) => setSelectedMigTable(e.target.value ? parseInt(e.target.value) : null)}
+                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white font-medium"
+                  >
+                    <option value="">Selecione uma tabela normativa...</option>
+                    {tabelasMig.map((tabela: any) => (
+                      <option key={tabela.id} value={tabela.id}>
+                        {tabela.nome}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedMigTable && (
+                    <p className="mt-2 text-sm text-gray-600">
+                      {tabelasMig.find((t: any) => t.id === selectedMigTable)?.descricao}
+                    </p>
+                  )}
+                </div>
 
-                  {/* Coluna Direita: Gabarito MIG - Modelo Original */}
-                  <div className="space-y-6">
-                    {/* Gabarito MIG - Layout Original */}
-                    <div className="bg-white rounded-lg border border-gray-200 p-5">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                          <span className="text-xl">📝</span>
-                          Gabarito MIG
-                        </h3>
-                        <div className="flex items-center gap-2"></div>
-                      </div>
+                {/* Gabarito MIG - Largura Completa */}
+                <div className="space-y-6">
+                  {/* Gabarito MIG - Layout Original */}
+                  <div className="bg-white rounded-lg border border-gray-200 p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <span className="text-xl">📝</span>
+                        Gabarito MIG
+                      </h3>
+                      <div className="flex items-center gap-2"></div>
+                    </div>
 
-                      {/* Gabarito no formato original - 2 colunas */}
-                      <div className="max-h-[70vh] overflow-auto pr-2 space-y-2 md:min-w-[520px] lg:min-w-[600px]">
+                    {/* Gabarito no formato original - 2 colunas */}
+                    <div className="max-h-[70vh] overflow-auto pr-2 space-y-2">
                         {/* Cabeçalhos das duas colunas */}
                         <div className="grid grid-cols-2 gap-3 sticky top-0 bg-white z-10">
                           {[0,1].map((col) => (
@@ -1051,7 +1188,7 @@ export default function TestesPage() {
                             {/* Exemplo 1 */}
                             <div className="grid grid-cols-2 gap-3 py-1 text-[12px]">
                               <div className="text-center font-medium">Exemplo 1</div>
-                              <div className="flex flex-col items-center">
+                              <div className="flex items-center justify-center">
                                 <div className="grid grid-cols-4 gap-2">
                                   {['A', 'B', 'C', 'D'].map((option) => (
                                     <button
@@ -1063,16 +1200,13 @@ export default function TestesPage() {
                                     </button>
                                   ))}
                                 </div>
-                                <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
-                                  <span>A</span><span>B</span><span>C</span><span>D</span>
-                                </div>
                               </div>
                             </div>
 
                             {/* Exemplo 2 */}
                             <div className="grid grid-cols-2 gap-3 py-1 text-[12px]">
                               <div className="text-center font-medium">Exemplo 2</div>
-                              <div className="flex flex-col items-center">
+                              <div className="flex items-center justify-center">
                                 <div className="grid grid-cols-4 gap-2">
                                   {['A', 'B', 'C', 'D'].map((option) => (
                                     <button
@@ -1084,9 +1218,6 @@ export default function TestesPage() {
                                     </button>
                                   ))}
                                 </div>
-                                <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
-                                  <span>A</span><span>B</span><span>C</span><span>D</span>
-                                </div>
                               </div>
                             </div>
 
@@ -1096,7 +1227,7 @@ export default function TestesPage() {
                               return (
                                 <div key={questao} className="grid grid-cols-2 gap-3 py-1 text-[12px]">
                                   <div className="text-center font-medium">{questao}</div>
-                                  <div className="flex flex-col items-center">
+                                  <div className="flex items-center justify-center">
                                     <div className="grid grid-cols-4 gap-2">
                                       {['A', 'B', 'C', 'D'].map((option) => (
                                         <button
@@ -1107,9 +1238,6 @@ export default function TestesPage() {
                                           {option}
                                         </button>
                                       ))}
-                                    </div>
-                                    <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
-                                      <span>A</span><span>B</span><span>C</span><span>D</span>
                                     </div>
                                   </div>
                                 </div>
@@ -1120,11 +1248,11 @@ export default function TestesPage() {
                           {/* Coluna Direita: 14-28 */}
                           <div className="space-y-1">
                             {Array.from({ length: 15 }, (_, i) => i + 14).map((questao) => {
-                              const idx = questao + 1;
+                              const idx = questao + 1; // exemplos ocupam 0 e 1, então questão 14 = índice 15
                               return (
                                 <div key={questao} className="grid grid-cols-2 gap-3 py-1 text-[12px]">
                                   <div className="text-center font-medium">{questao}</div>
-                                  <div className="flex flex-col items-center">
+                                  <div className="flex items-center justify-center">
                                     <div className="grid grid-cols-4 gap-2">
                                       {['A', 'B', 'C', 'D'].map((option) => (
                                         <button
@@ -1135,9 +1263,6 @@ export default function TestesPage() {
                                           {option}
                                         </button>
                                       ))}
-                                    </div>
-                                    <div className="grid grid-cols-4 gap-2 text-[11px] text-gray-500 mt-1">
-                                      <span>A</span><span>B</span><span>C</span><span>D</span>
                                     </div>
                                   </div>
                                 </div>
@@ -1149,8 +1274,8 @@ export default function TestesPage() {
                     </div>
                   </div>
 
-                  {/* Resumo dos Acertos */}
-                  <div className="bg-white border-2 border-gray-200 rounded-xl p-6 mt-6">
+                {/* Resumo dos Acertos */}
+                <div className="bg-white border-2 border-gray-200 rounded-xl p-6 mt-6">
                     <div className="text-base font-bold text-gray-800 mb-4">Resumo:</div>
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div className="bg-green-50 rounded-lg p-3 border-2 border-green-200">
@@ -1173,26 +1298,24 @@ export default function TestesPage() {
                     </div>
                   </div>
 
-                  {/* Botão Calcular Resultado - MIG */}
-                  <div className="flex justify-center mt-8 gap-3">
-                    <button
-                      onClick={() => {
-                        setMigAnswers(Array(28).fill(''));
-                        setMigAnswerKey(Array(28).fill(''));
-                      }}
-                      className="px-5 py-3 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2"
-                    >
-                      <span>🗑️</span>
-                      Limpar
-                    </button>
-                    <button
-                      onClick={handleCalculate}
-                      className="bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-8 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2"
-                    >
-                      <span>📊</span>
-                      Calcular Resultado
-                    </button>
-                  </div>
+                {/* Botões - MIG */}
+                <div className="flex justify-center mt-6 gap-3">
+                  <button
+                    onClick={() => {
+                      setMigAnswers(Array(MIG_TOTAL_POSITIONS).fill(''));
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2"
+                  >
+                    <span>🗑️</span>
+                    Limpar
+                  </button>
+                  <button
+                    onClick={handleCalculate}
+                    className="bg-blue-600 text-white py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm flex items-center gap-2"
+                  >
+                    <span>📊</span>
+                    Calcular Resultado
+                  </button>
                 </div>
               </div>
             )}
@@ -1230,26 +1353,90 @@ export default function TestesPage() {
                         </div>
                       </div>
                       <div className="space-y-4">
-                        <div className="bg-blue-50 p-4 rounded-lg">
-                          <h5 className="font-semibold text-blue-700 mb-2">Resultado</h5>
-                          <div className="text-3xl font-bold text-blue-800 mb-2">{testData.eb || 0}</div>
-                          <p className="text-sm text-blue-600">Eficiência de Busca (EB)</p>
+                        {/* Resultado (EB) e Classificação lado a lado */}
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+                            <h5 className="font-semibold text-blue-700 mb-2">Resultado</h5>
+                            <div className="text-3xl font-bold text-blue-800 mb-1">{testData.eb || 0}</div>
+                            <p className="text-sm text-blue-600">Eficiência de Busca (EB)</p>
+                          </div>
+                          <div className="bg-green-50 p-4 rounded-lg border-2 border-green-200">
+                            <h5 className="font-semibold text-green-700 mb-2">Classificação</h5>
+                            <div className="text-2xl font-bold text-green-800 mt-2">
+                              {results.classificacao || 'N/A'}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
                   </div>
                 )}
 
-                <div className="bg-gray-50 rounded-lg p-6">
-                  <div className="space-y-2">
-                    {Object.entries(results).map(([key, value]) => (
-                      <div key={key} className="flex justify-between">
-                        <span className="text-gray-600">{key}:</span>
-                        <span className="font-medium">{String(value)}</span>
+                {selectedTest.id === 'mig' && (
+                  <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4">🧠 MIG - Resultados da Avaliação</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {/* Acertos */}
+                      <div className="bg-green-50 p-4 rounded-lg border-2 border-green-200">
+                        <h5 className="font-semibold text-green-700 mb-2">✅ Acertos</h5>
+                        <div className="text-4xl font-bold text-green-800 mb-1">{migCorrectCount}</div>
+                        <p className="text-sm text-green-600">de 28 questões</p>
                       </div>
-                    ))}
+
+                      {/* Percentil */}
+                      <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+                        <h5 className="font-semibold text-blue-700 mb-2">📊 Percentil</h5>
+                        <div className="text-4xl font-bold text-blue-800 mb-1">
+                          {results.percentil || 'N/A'}
+                        </div>
+                        <p className="text-sm text-blue-600">Posição relativa</p>
+                      </div>
+
+                      {/* QI */}
+                      <div className="bg-purple-50 p-4 rounded-lg border-2 border-purple-200">
+                        <h5 className="font-semibold text-purple-700 mb-2">🎯 QI</h5>
+                        <div className="text-4xl font-bold text-purple-800 mb-1">
+                          {results.qi || 'N/A'}
+                        </div>
+                        <p className="text-sm text-purple-600">Quociente de Inteligência</p>
+                      </div>
+                    </div>
+
+                    {/* Classificação */}
+                    {results.classificacao && (
+                      <div className="mt-6 bg-gradient-to-r from-indigo-50 to-blue-50 p-4 rounded-lg border-2 border-indigo-200">
+                        <h5 className="font-semibold text-indigo-700 mb-2">🏆 Classificação</h5>
+                        <div className="text-2xl font-bold text-indigo-900">
+                          {results.classificacao}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tabela utilizada */}
+                    {selectedMigTable && (
+                      <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                        <p className="text-sm text-gray-600">
+                          <span className="font-semibold">Tabela normativa:</span>{' '}
+                          {tabelasMig.find((t: any) => t.id === selectedMigTable)?.nome}
+                        </p>
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
+
+                {/* Resultados genéricos para outros testes */}
+                {selectedTest.id !== 'memore' && selectedTest.id !== 'mig' && (
+                  <div className="bg-gray-50 rounded-lg p-6">
+                    <div className="space-y-2">
+                      {Object.entries(results).map(([key, value]) => (
+                        <div key={key} className="flex justify-between">
+                          <span className="text-gray-600">{key}:</span>
+                          <span className="font-medium">{String(value)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
