@@ -1405,53 +1405,6 @@ export default function TestesPage() {
               <div className="mt-8">
                 <h3 className="text-xl font-bold text-gray-900 mb-6 text-center">📊 Resultados do Teste</h3>
                 
-                {selectedTest.id === 'memore' && (
-                  <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-                    <h4 className="text-lg font-semibold text-gray-900 mb-4">🧠 MEMORE - Resultados</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-4">
-                        <div className="bg-gray-50 p-4 rounded-lg">
-                          <h5 className="font-semibold text-gray-700 mb-2">Contadores</h5>
-                          <div className="space-y-2">
-                            <div className="flex justify-between">
-                              <span>Verdadeiros Positivos (VP):</span>
-                              <span className="font-bold text-green-600">{testData.vp || 0}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Verdadeiros Negativos (VN):</span>
-                              <span className="font-bold text-green-600">{testData.vn || 0}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Falsos Negativos (FN):</span>
-                              <span className="font-bold text-red-600">{testData.fn || 0}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Falsos Positivos (FP):</span>
-                              <span className="font-bold text-red-600">{testData.fp || 0}</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="space-y-4">
-                        {/* Resultado (EB) e Classificação lado a lado */}
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
-                            <h5 className="font-semibold text-blue-700 mb-2">Resultado</h5>
-                            <div className="text-3xl font-bold text-blue-800 mb-1">{testData.eb || 0}</div>
-                            <p className="text-sm text-blue-600">Eficiência de Busca (EB)</p>
-                          </div>
-                          <div className="bg-green-50 p-4 rounded-lg border-2 border-green-200">
-                            <h5 className="font-semibold text-green-700 mb-2">Classificação</h5>
-                            <div className="text-2xl font-bold text-green-800 mt-2">
-                              {results.classificacao || 'N/A'}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
                 {selectedTest.id === 'mig' && (
                   <div className="bg-white rounded-lg shadow-md p-6 mb-6">
                     <h4 className="text-lg font-semibold text-gray-900 mb-4">🧠 MIG - Resultados da Avaliação</h4>
