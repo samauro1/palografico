@@ -384,6 +384,41 @@ export default function TestesPage() {
     }
   }, [tabelasMemore, selectedMemoreTable, selectedTest?.id]);
 
+  // Calcular automaticamente os resultados do MEMORE quando os campos mudarem
+  useEffect(() => {
+    if (selectedTest?.id === 'memore' && selectedMemoreTable) {
+      const vp = parseInt(String(testData.vp || 0));
+      const vn = parseInt(String(testData.vn || 0));
+      const fn = parseInt(String(testData.fn || 0));
+      const fp = parseInt(String(testData.fp || 0));
+      const eb = typeof testData.eb === 'number' ? testData.eb : parseInt(String(testData.eb || 0));
+
+      // Se EB > 0 e temos tabela selecionada, calcular
+      if (eb > 0) {
+        const calcularAutomatico = async () => {
+          try {
+            const dataToSend: any = {
+              tabela_id: selectedMemoreTable,
+              vp,
+              vn,
+              fn,
+              fp,
+              eb
+            };
+
+            const response = await tabelasService.calculate('memore', dataToSend);
+            const resultado = response.data.resultado || response.data || {};
+            setResults(resultado as TestResult);
+          } catch (error) {
+            console.error('Erro ao calcular MEMORE automaticamente:', error);
+          }
+        };
+
+        calcularAutomatico();
+      }
+    }
+  }, [testData.vp, testData.vn, testData.fn, testData.fp, testData.eb, selectedMemoreTable, selectedTest?.id]);
+
   // Buscar tabelas normativas do MIG para seleção
   const { data: tabelasMigData } = useQuery({
     queryKey: ['mig-tabelas'],
@@ -1099,47 +1134,71 @@ export default function TestesPage() {
                         </div>
                       </div>
 
-                      {/* Contadores - Movidos para baixo do crivo */}
-                      <div className="bg-white border-2 border-gray-200 rounded-xl p-6 mt-6">
-                        <div className="text-base font-bold text-gray-800 mb-4">Contadores:</div>
-                        <div className="grid grid-cols-2 gap-4 mb-4">
-                          <div className="bg-gray-50 rounded-lg p-3">
-                            <span className="text-xs text-gray-600 font-medium">VP:</span>
-                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.vp || 0}</span>
-                        </div>
-                          <div className="bg-gray-50 rounded-lg p-3">
-                            <span className="text-xs text-gray-600 font-medium">VN:</span>
-                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.vn || 0}</span>
-                        </div>
-                          <div className="bg-gray-50 rounded-lg p-3">
-                            <span className="text-xs text-gray-600 font-medium">FN:</span>
-                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.fn || 0}</span>
-                      </div>
-                          <div className="bg-gray-50 rounded-lg p-3">
-                            <span className="text-xs text-gray-600 font-medium">FP:</span>
-                            <span className="text-lg font-bold text-gray-900 ml-2">{testData.fp || 0}</span>
+                      {/* Resultados Automáticos - Movidos para baixo do crivo */}
+                      {results && Object.keys(results).length > 0 && (
+                        <div className="bg-white border-2 border-indigo-200 rounded-xl p-6 mt-6">
+                          <h4 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                            <span>📊</span>
+                            Resultados do Teste
+                          </h4>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {/* Contadores */}
+                            <div className="bg-gray-50 p-4 rounded-lg">
+                              <h5 className="font-semibold text-gray-700 mb-3 text-sm">Contadores</h5>
+                              <div className="space-y-2">
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-gray-600">VP:</span>
+                                  <span className="font-bold text-green-600">{testData.vp || 0}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-gray-600">VN:</span>
+                                  <span className="font-bold text-green-600">{testData.vn || 0}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-gray-600">FN:</span>
+                                  <span className="font-bold text-red-600">{testData.fn || 0}</span>
+                                </div>
+                                <div className="flex justify-between text-sm">
+                                  <span className="text-gray-600">FP:</span>
+                                  <span className="font-bold text-red-600">{testData.fp || 0}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Resultado (EB) */}
+                            <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+                              <h5 className="font-semibold text-blue-700 mb-2 text-sm">Resultado</h5>
+                              <div className="text-4xl font-bold text-blue-800 mb-1">{testData.eb || 0}</div>
+                              <p className="text-xs text-blue-600">Eficiência de Busca (EB)</p>
+                            </div>
+
+                            {/* Classificação */}
+                            <div className="bg-green-50 p-4 rounded-lg border-2 border-green-200">
+                              <h5 className="font-semibold text-green-700 mb-2 text-sm">Classificação</h5>
+                              <div className="text-2xl font-bold text-green-800 mt-4">
+                                {results.classificacao || 'N/A'}
+                              </div>
+                            </div>
                           </div>
                         </div>
-                        <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
-                          <div className="text-sm font-semibold text-blue-700 mb-1">Resultado (EB):</div>
-                          <div className="text-3xl font-bold text-blue-800">{testData.eb || 0}</div>
-                          <div className="text-xs text-blue-600 mt-1">(VP + VN) - (FN + FP)</div>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   </div>
                 </div>
 
-                {/* Botões unificados */}
-                <div className="flex justify-center mt-8 gap-3">
-                  <button
-                    onClick={handleCalculate}
-                    className="bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-8 rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2"
-                  >
-                    <span>📊</span>
-                    Calcular Resultado
-                  </button>
-                </div>
+                {/* Botão Imprimir Resultado */}
+                {results && Object.keys(results).length > 0 && (
+                  <div className="flex justify-center mt-8">
+                    <button
+                      onClick={() => window.print()}
+                      className="bg-gradient-to-r from-green-600 to-green-700 text-white py-3 px-8 rounded-xl hover:from-green-700 hover:to-green-800 transition-all duration-200 font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2"
+                    >
+                      <span>🖨️</span>
+                      Imprimir Resultado
+                    </button>
+                  </div>
+                )}
               </>
             )}
 
