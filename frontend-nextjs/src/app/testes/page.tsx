@@ -553,7 +553,7 @@ export default function TestesPage() {
             </div>
 
             {/* Interface específica para cada teste */}
-            {selectedTest.id === 'bpa2' ? (
+            {selectedTest.id === 'bpa2' && (
               // Layout especial para BPA-2 - três modalidades de atenção
               <div className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -721,7 +721,9 @@ export default function TestesPage() {
                   </p>
                 </div>
               </div>
-            ) : selectedTest.id === 'rotas' ? (
+            )}
+
+            {selectedTest.id === 'rotas' && (
               // Layout especial para Rotas de Atenção
               <div className="space-y-6">
                 {/* Rota A - Atenção Alternada */}
@@ -877,26 +879,6 @@ export default function TestesPage() {
                   </div>
                 </div>
               </div>
-            ) : (
-              // Layout padrão para outros testes
-              <div className="space-y-4">
-                {selectedTest.campos.map((campo) => (
-                  <div key={campo.nome}>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      {campo.label}
-                    </label>
-                    <input
-                      type={campo.tipo}
-                      value={testData[campo.nome] || ''}
-                      onChange={(e) => handleInputChange(campo.nome, e.target.value)}
-                      min={campo.min}
-                      max={campo.max}
-                      step={campo.step}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                ))}
-              </div>
             )}
 
             {/* Botão Calcular Resultado - apenas para testes que não são MEMORE nem MIG */}
@@ -918,17 +900,28 @@ export default function TestesPage() {
                 <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Coluna Esquerda (2/3): Tabela Normativa */}
-                  <div className="lg:col-span-2">
+                  <div className="lg:col-span-2 space-y-6">
+                    {/* Header do Teste */}
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-12 h-12 bg-gradient-to-br from-pink-400 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
+                        <span className="text-2xl">🧠</span>
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-gray-900">Memore - Memória</h3>
+                        <p className="text-sm text-gray-600">Avaliação da capacidade de memória</p>
+                      </div>
+                    </div>
+
                     {/* Seletor de Tabela Normativa */}
-                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-4">
-                      <label className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-                        <span className="text-base">📊</span>
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-5">
+                      <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                        <span className="text-lg">📊</span>
                         Tabela Normativa
                       </label>
                       <select
                         value={selectedMemoreTable || ''}
                         onChange={(e) => setSelectedMemoreTable(e.target.value ? Number(e.target.value) : null)}
-                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-sm"
+                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white font-medium"
                       >
                         <option value="">Selecione a tabela normativa</option>
                         {tabelasMemore.map((tabela: any) => (
@@ -937,20 +930,25 @@ export default function TestesPage() {
                           </option>
                         ))}
                       </select>
-                      <p className="text-xs text-gray-600 mt-2 flex items-start gap-1">
-                        <span className="text-yellow-600">⚠️</span>
-                        <span>Selecione a tabela de acordo com o contexto (trânsito, idade, escolaridade ou geral)</span>
+                      <p className="text-xs text-gray-600 mt-2">
+                        ⚠️ Selecione a tabela de acordo com o contexto (trânsito, idade, escolaridade ou geral)
                       </p>
                     </div>
                   </div>
 
-                  {/* Coluna Direita (1/3): Entrada Manual - Compacta */}
+                  {/* Coluna Direita (1/3): Entrada Manual */}
                   <div className="lg:col-span-1">
-                    <div className="bg-white rounded-lg border-2 border-gray-200 p-3">
-                      <div className="space-y-2">
+                    <div className="bg-white rounded-lg border-2 border-gray-200 p-4 sticky top-4">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">🧠</span>
+                        <h4 className="text-base font-semibold text-gray-800">Memore - Memória</h4>
+                      </div>
+                      <p className="text-xs text-gray-500 mb-4">Avaliação da capacidade de memória</p>
+                      
+                      <div className="space-y-3">
                         {selectedTest.campos.map((campo) => (
                           <div key={campo.nome}>
-                            <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
                               {campo.label}
                             </label>
                             <input
@@ -959,7 +957,7 @@ export default function TestesPage() {
                               onChange={(e) => handleInputChange(campo.nome, e.target.value)}
                               min={campo.min}
                               max={campo.max}
-                              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-pink-500 focus:border-pink-500"
+                              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
                             />
                           </div>
                         ))}
