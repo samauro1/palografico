@@ -372,6 +372,18 @@ export default function TestesPage() {
     return tabelasNormativas?.filter((tabela: any) => tabela.tipo === 'memore') || [];
   }, [tabelasNormativas]);
 
+  // Selecionar automaticamente a tabela "Trânsito - Escolaridade" como padrão
+  useEffect(() => {
+    if (tabelasMemore.length > 0 && !selectedMemoreTable && selectedTest?.id === 'memore') {
+      const tabelaPadrao = tabelasMemore.find((t: any) => 
+        t.nome.includes('Trânsito') && t.nome.includes('Escolaridade')
+      );
+      if (tabelaPadrao) {
+        setSelectedMemoreTable(tabelaPadrao.id);
+      }
+    }
+  }, [tabelasMemore, selectedMemoreTable, selectedTest?.id]);
+
   // Buscar tabelas normativas do MIG para seleção
   const { data: tabelasMigData } = useQuery({
     queryKey: ['mig-tabelas'],
@@ -936,19 +948,19 @@ export default function TestesPage() {
                     </div>
                   </div>
 
-                  {/* Coluna Direita (1/3): Entrada Manual */}
+                  {/* Coluna Direita (1/3): Entrada Manual - Reduzida 50% */}
                   <div className="lg:col-span-1">
-                    <div className="bg-white rounded-lg border-2 border-gray-200 p-4 sticky top-4">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-lg">🧠</span>
-                        <h4 className="text-base font-semibold text-gray-800">Memore - Memória</h4>
+                    <div className="bg-white rounded-lg border border-gray-200 p-2 sticky top-4">
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <span className="text-sm">🧠</span>
+                        <h4 className="text-xs font-semibold text-gray-800">Memore - Memória</h4>
                       </div>
-                      <p className="text-xs text-gray-500 mb-4">Avaliação da capacidade de memória</p>
+                      <p className="text-[10px] text-gray-500 mb-2">Avaliação da capacidade de memória</p>
                       
-                      <div className="space-y-3">
+                      <div className="space-y-1.5">
                         {selectedTest.campos.map((campo) => (
                           <div key={campo.nome}>
-                            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                            <label className="block text-[10px] font-medium text-gray-600 mb-0.5">
                               {campo.label}
                             </label>
                             <input
@@ -957,7 +969,7 @@ export default function TestesPage() {
                               onChange={(e) => handleInputChange(campo.nome, e.target.value)}
                               min={campo.min}
                               max={campo.max}
-                              className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-pink-500 focus:border-pink-500"
+                              className="w-full px-1.5 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-pink-500 focus:border-pink-500"
                             />
                           </div>
                         ))}
