@@ -944,10 +944,10 @@ export default function TestesPage() {
             {/* Layout em duas colunas para MEMORE */}
             {selectedTest.id === 'memore' && (
               <>
-                <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8 print:p-0 print:shadow-none print:border-0">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 print:grid-cols-1">
+                <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Coluna Esquerda (2/3): Tabela Normativa */}
-                  <div className="lg:col-span-2 space-y-6 print:col-span-1">
+                  <div className="lg:col-span-2 space-y-6">
                     {/* Header do Teste */}
                     <div className="flex items-center gap-3 mb-6">
                       <div className="w-12 h-12 bg-gradient-to-br from-pink-400 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
@@ -960,7 +960,7 @@ export default function TestesPage() {
                     </div>
 
                     {/* Seletor de Tabela Normativa */}
-                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-5 print:hidden">
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-5">
                       <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
                         <span className="text-lg">📊</span>
                         Tabela Normativa
@@ -984,7 +984,7 @@ export default function TestesPage() {
                   </div>
 
                   {/* Coluna Direita (1/3): Entrada Manual - Reduzida 50% */}
-                  <div className="lg:col-span-1 print:hidden">
+                  <div className="lg:col-span-1">
                     <div className="bg-white rounded-lg border border-gray-200 p-2 sticky top-4">
                       <div className="flex items-center gap-1 mb-0.5">
                         <span className="text-sm">🧠</span>
@@ -1014,7 +1014,7 @@ export default function TestesPage() {
                 </div>
 
                   {/* Coluna Direita: Crivo de Correção */}
-                  <div className="space-y-6 print:hidden">
+                  <div className="space-y-6">
                     {/* Seção do Crivo */}
                     <div className="bg-white rounded-lg border border-gray-200 p-4">
                       <div className="flex items-center justify-between mb-4">
@@ -1025,7 +1025,7 @@ export default function TestesPage() {
                         <button
                           type="button"
                           onClick={clearMemoreMarks}
-                          className="px-5 py-2.5 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2"
+                          className="px-5 py-2.5 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2 print:hidden"
                         >
                           <span>🗑️</span>
                           Limpar marcações
@@ -1189,7 +1189,7 @@ export default function TestesPage() {
 
                 {/* Botão Imprimir Resultado */}
                 {results && Object.keys(results).length > 0 && (
-                  <div className="flex justify-center mt-8">
+                  <div className="flex justify-center mt-8 print:hidden">
                     <button
                       onClick={() => window.print()}
                       className="bg-gradient-to-r from-green-600 to-green-700 text-white py-3 px-8 rounded-xl hover:from-green-700 hover:to-green-800 transition-all duration-200 font-bold text-base shadow-lg hover:shadow-xl transform hover:scale-105 flex items-center gap-2"
