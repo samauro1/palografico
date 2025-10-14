@@ -916,46 +916,57 @@ export default function TestesPage() {
             {selectedTest.id === 'memore' && (
               <>
                 <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    {/* Coluna Esquerda: Info do Teste */}
-                  <div className="space-y-6">
-                      {/* Header do Teste */}
-                      <div>
-                        <div className="flex items-center gap-3 mb-6">
-                          <div className="w-12 h-12 bg-gradient-to-br from-pink-400 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
-                            <span className="text-2xl">🧠</span>
-                        </div>
-                          <div>
-                            <h3 className="text-2xl font-bold text-gray-900">Memore - Memória</h3>
-                            <p className="text-sm text-gray-600">Avaliação da capacidade de memória</p>
-                          </div>
-                        </div>
-                      </div>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Coluna Esquerda (2/3): Tabela Normativa */}
+                  <div className="lg:col-span-2">
+                    {/* Seletor de Tabela Normativa */}
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-4">
+                      <label className="block text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
+                        <span className="text-base">📊</span>
+                        Tabela Normativa
+                      </label>
+                      <select
+                        value={selectedMemoreTable || ''}
+                        onChange={(e) => setSelectedMemoreTable(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-sm"
+                      >
+                        <option value="">Selecione a tabela normativa</option>
+                        {tabelasMemore.map((tabela: any) => (
+                          <option key={tabela.id} value={tabela.id}>
+                            {tabela.nome}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-600 mt-2 flex items-start gap-1">
+                        <span className="text-yellow-600">⚠️</span>
+                        <span>Selecione a tabela de acordo com o contexto (trânsito, idade, escolaridade ou geral)</span>
+                      </p>
+                    </div>
+                  </div>
 
-                      {/* Seletor de Tabela Normativa */}
-                      <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-4">
-                        <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                          <span className="text-lg">📊</span>
-                          Tabela Normativa
-                        </label>
-                        <select
-                          value={selectedMemoreTable || ''}
-                          onChange={(e) => setSelectedMemoreTable(e.target.value ? Number(e.target.value) : null)}
-                          className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white font-medium"
-                        >
-                          <option value="">Selecione a tabela normativa</option>
-                          {tabelasMemore.map((tabela: any) => (
-                            <option key={tabela.id} value={tabela.id}>
-                              {tabela.nome}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-xs text-gray-600 mt-2">
-                          ⚠️ Selecione a tabela de acordo com o contexto (trânsito, idade, escolaridade ou geral)
-                        </p>
+                  {/* Coluna Direita (1/3): Entrada Manual - Compacta */}
+                  <div className="lg:col-span-1">
+                    <div className="bg-white rounded-lg border-2 border-gray-200 p-3">
+                      <div className="space-y-2">
+                        {selectedTest.campos.map((campo) => (
+                          <div key={campo.nome}>
+                            <label className="block text-[11px] font-medium text-gray-600 mb-1">
+                              {campo.label}
+                            </label>
+                            <input
+                              type={campo.tipo}
+                              value={testData[campo.nome] || ''}
+                              onChange={(e) => handleInputChange(campo.nome, e.target.value)}
+                              min={campo.min}
+                              max={campo.max}
+                              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-pink-500 focus:border-pink-500"
+                            />
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </div>
+                </div>
 
                   {/* Coluna Direita: Crivo de Correção */}
                   <div className="space-y-6">
