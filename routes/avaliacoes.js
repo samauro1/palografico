@@ -40,14 +40,14 @@ router.get('/', async (req, res) => {
     const dataQuery = `
       SELECT 
         a.id, a.numero_laudo, a.data_aplicacao, a.aplicacao, 
-        a.tipo_habilitacao, a.observacoes, a.created_at,
+        a.tipo_habilitacao, a.observacoes, a.aptidao, a.created_at,
         p.nome as paciente_nome, p.cpf as paciente_cpf,
         u.nome as usuario_nome
       FROM avaliacoes a 
       JOIN pacientes p ON a.paciente_id = p.id 
       JOIN usuarios u ON a.usuario_id = u.id
       ${whereClause}
-      ORDER BY a.created_at DESC 
+      ORDER BY a.data_aplicacao DESC, a.created_at DESC 
       LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}
     `;
 
@@ -79,8 +79,8 @@ router.get('/:id', async (req, res) => {
 
     const result = await query(`
       SELECT 
-        a.id, a.numero_laudo, a.data_aplicacao, a.aplicacao, 
-        a.tipo_habilitacao, a.observacoes, a.created_at,
+        a.id, a.paciente_id, a.numero_laudo, a.data_aplicacao, a.aplicacao, 
+        a.tipo_habilitacao, a.observacoes, a.aptidao, a.created_at,
         p.nome as paciente_nome, p.cpf as paciente_cpf, p.idade, p.escolaridade,
         u.nome as usuario_nome
       FROM avaliacoes a 
@@ -109,20 +109,11 @@ router.get('/:id', async (req, res) => {
 // Criar avaliação
 router.post('/', validate(avaliacaoSchema), async (req, res) => {
   try {
-    const { paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes } = req.body;
+    const { paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidao } = req.body;
     const usuario_id = req.user.id;
 
-    // Verificar se o número do laudo já existe
-    const existingLaudo = await query(
-      'SELECT id FROM avaliacoes WHERE numero_laudo = $1',
-      [numero_laudo]
-    );
-
-    if (existingLaudo.rows.length > 0) {
-      return res.status(400).json({
-        error: 'Número do laudo já está em uso'
-      });
-    }
+    // Não mais verificar se laudo existe - agora um laudo pode ter múltiplas avaliações
+    // Removida verificação de laudo único
 
     // Verificar se o paciente existe
     const paciente = await query(
@@ -136,11 +127,20 @@ router.post('/', validate(avaliacaoSchema), async (req, res) => {
       });
     }
 
+    // Converter string vazia para null
+    const aptidaoValue = aptidao && aptidao.trim() !== '' ? aptidao : null;
+    
+    console.log('📋 Criando avaliação com aptidão:', {
+      aptidao_original: aptidao,
+      aptidao_convertido: aptidaoValue,
+      tipo_aptidao: typeof aptidaoValue
+    });
+
     const result = await query(`
-      INSERT INTO avaliacoes (paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7) 
-      RETURNING id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, created_at
-    `, [paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes]);
+      INSERT INTO avaliacoes (paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidao) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
+      RETURNING id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidao, created_at
+    `, [paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidaoValue]);
 
     res.status(201).json({
       message: 'Avaliação criada com sucesso',
@@ -158,7 +158,7 @@ router.post('/', validate(avaliacaoSchema), async (req, res) => {
 router.put('/:id', validate(avaliacaoSchema), async (req, res) => {
   try {
     const { id } = req.params;
-    const { paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes } = req.body;
+    const { paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidao } = req.body;
 
     // Verificar se a avaliação existe
     const existingAvaliacao = await query(
@@ -172,17 +172,8 @@ router.put('/:id', validate(avaliacaoSchema), async (req, res) => {
       });
     }
 
-    // Verificar se o número do laudo já está em uso por outra avaliação
-    const laudoCheck = await query(
-      'SELECT id FROM avaliacoes WHERE numero_laudo = $1 AND id != $2',
-      [numero_laudo, id]
-    );
-
-    if (laudoCheck.rows.length > 0) {
-      return res.status(400).json({
-        error: 'Número do laudo já está em uso por outra avaliação'
-      });
-    }
+    // Não mais verificar se laudo está em uso - agora múltiplas avaliações podem ter o mesmo laudo
+    // Removida verificação de laudo único
 
     // Verificar se o paciente existe
     const paciente = await query(
@@ -196,14 +187,17 @@ router.put('/:id', validate(avaliacaoSchema), async (req, res) => {
       });
     }
 
+    // Converter string vazia para null
+    const aptidaoValue = aptidao && aptidao.trim() !== '' ? aptidao : null;
+
     const result = await query(`
       UPDATE avaliacoes 
       SET paciente_id = $1, numero_laudo = $2, data_aplicacao = $3, 
           aplicacao = $4, tipo_habilitacao = $5, observacoes = $6, 
-          updated_at = CURRENT_TIMESTAMP 
-      WHERE id = $7 
-      RETURNING id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, updated_at
-    `, [paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, id]);
+          aptidao = $7, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $8 
+      RETURNING id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidao, updated_at
+    `, [paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidaoValue, id]);
 
     res.json({
       message: 'Avaliação atualizada com sucesso',

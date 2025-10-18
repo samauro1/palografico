@@ -17,13 +17,17 @@ const loginSchema = Joi.object({
 const pacienteSchema = Joi.object({
   nome: Joi.string().min(2).max(255).required(),
   cpf: Joi.string().pattern(/^\d{3}\.\d{3}\.\d{3}-\d{2}$/).required(),
-  data_nascimento: Joi.date().optional().allow('', null),
+  data_nascimento: Joi.alternatives().try(
+    Joi.date(),
+    Joi.string().isoDate()
+  ).optional().allow('', null),
   numero_laudo: Joi.string().max(50).optional().allow('', null),
   contexto: Joi.string().valid('Clínico', 'Organizacional', 'Trânsito').optional().allow('', null),
   tipo_transito: Joi.string().valid('1ª Habilitação', 'Renovação', 'Adição/Mudança de Categoria', 'Curso Escolar', 'Instrutor', 'Segunda via', 'Reincidente', 'EAR - Exerce Atividade Remunerada', 'Cassação', 'Reg. Estrangeiro').optional().allow('', null),
   escolaridade: Joi.string().valid('E. Fundamental', 'E. Médio', 'E. Superior', 'Pós-Graduação', 'Não Escolarizado').required(),
   telefone: Joi.string().max(20).optional().allow('', null),
   email: Joi.string().email().optional().allow('', null),
+  endereco: Joi.string().max(500).optional().allow('', null),
   observacoes: Joi.string().max(3000).optional().allow('', null),
   allow_duplicate_phone: Joi.boolean().optional(),
   allow_duplicate_email: Joi.boolean().optional()
@@ -36,7 +40,8 @@ const avaliacaoSchema = Joi.object({
   data_aplicacao: Joi.date().required(),
   aplicacao: Joi.string().valid('Coletiva', 'Individual').required(),
   tipo_habilitacao: Joi.string().valid('1ª Habilitação', 'Renovação', 'Adição/Mudança de Categoria', 'Curso Escolar', 'Instrutor', 'Segunda via', 'Reincidente', 'EAR - Exerce Atividade Remunerada', 'Cassação', 'Reg. Estrangeiro', 'Psicológica').required(),
-  observacoes: Joi.string().max(3000).optional().allow('', null)
+  observacoes: Joi.string().max(3000).optional().allow('', null),
+  aptidao: Joi.string().valid('Apto', 'Inapto Temporário', 'Inapto').optional().allow('', null)
 });
 
 // Validação de resultados AC
@@ -107,7 +112,7 @@ const movimentacaoEstoqueSchema = Joi.object({
   teste_id: Joi.number().integer().positive().required(),
   tipo_movimentacao: Joi.string().valid('entrada', 'saida').required(),
   quantidade: Joi.number().integer().positive().required(),
-  observacoes: Joi.string().max(500).optional()
+  observacoes: Joi.string().max(500).allow('', null).optional()
 });
 
 // Middleware de validação
@@ -116,6 +121,15 @@ const validate = (schema) => {
     const { error, value } = schema.validate(req.body);
     
     if (error) {
+      console.log('❌ Erro de validação:', {
+        body: req.body,
+        errors: error.details.map(detail => ({
+          field: detail.path.join('.'),
+          message: detail.message,
+          type: detail.type
+        }))
+      });
+      
       return res.status(400).json({
         error: 'Dados inválidos',
         details: error.details.map(detail => ({

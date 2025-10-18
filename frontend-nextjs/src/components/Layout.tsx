@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useConfiguracoes } from '@/contexts/ConfiguracoesContext';
 import Logo from './Logo';
 import {
   LayoutDashboard,
@@ -26,6 +27,7 @@ interface LayoutProps {
 const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
+  const { configuracoes } = useConfiguracoes();
   const pathname = usePathname();
 
   const navigation = [
@@ -49,7 +51,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-white">
           <div className="flex h-16 items-center justify-between px-4">
             <div className="flex items-center gap-3">
-              <Logo size="sm" />
+              {configuracoes?.logo_url ? (
+                <img 
+                  src={configuracoes.logo_url} 
+                  alt="Logo da Clínica" 
+                  className="h-10 w-10 rounded-lg object-cover border-2 border-blue-200"
+                />
+              ) : (
+                <Logo size="sm" />
+              )}
               <h1 className="text-xl font-bold text-gray-900">Sistema de Avaliação</h1>
             </div>
             <button
@@ -82,7 +92,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <div className="border-t border-gray-200 p-4">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <User className="h-8 w-8 text-gray-400" />
+                {configuracoes?.logo_url ? (
+                  <img 
+                    src={configuracoes.logo_url} 
+                    alt="Logo da Clínica" 
+                    className="h-10 w-10 rounded-full object-cover border-2 border-blue-200"
+                  />
+                ) : (
+                  <User className="h-8 w-8 text-gray-400" />
+                )}
               </div>
               <div className="ml-3">
                 <p className="text-sm font-medium text-gray-700">{user?.nome}</p>
@@ -105,7 +123,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         <div className="flex flex-col flex-grow bg-white border-r border-gray-200">
           <div className="flex h-16 items-center px-4">
             <div className="flex items-center gap-3">
-              <Logo size="sm" />
+              {configuracoes?.logo_url ? (
+                <img 
+                  src={configuracoes.logo_url} 
+                  alt="Logo da Clínica" 
+                  className="h-10 w-10 rounded-lg object-cover border-2 border-blue-200"
+                />
+              ) : (
+                <Logo size="sm" />
+              )}
               <h1 className="text-xl font-bold text-gray-900">Sistema de Avaliação</h1>
             </div>
           </div>
@@ -131,7 +157,15 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <div className="border-t border-gray-200 p-4">
             <div className="flex items-center">
               <div className="flex-shrink-0">
-                <User className="h-8 w-8 text-gray-400" />
+                {configuracoes?.logo_url ? (
+                  <img 
+                    src={configuracoes.logo_url} 
+                    alt="Logo da Clínica" 
+                    className="h-12 w-12 rounded-full object-cover border-2 border-blue-200"
+                  />
+                ) : (
+                  <User className="h-8 w-8 text-gray-400" />
+                )}
               </div>
               <div className="ml-3">
                 <p className="text-sm font-medium text-gray-700">{user?.nome}</p>
@@ -165,7 +199,17 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             <div className="flex items-center gap-x-4 lg:gap-x-6">
               <div className="hidden lg:block lg:h-6 lg:w-px lg:bg-gray-200" />
               <div className="flex items-center gap-x-3">
-                <Logo size="sm" />
+                {user?.foto_url ? (
+                  <img 
+                    src={user.foto_url} 
+                    alt="Foto do Usuário" 
+                    className="h-10 w-10 rounded-full object-cover border-2 border-blue-200"
+                  />
+                ) : (
+                  <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center border-2 border-blue-200">
+                    <User className="h-6 w-6 text-blue-600" />
+                  </div>
+                )}
                 <span className="text-sm text-gray-700">Bem-vindo, {user?.nome}</span>
               </div>
             </div>

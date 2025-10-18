@@ -23,19 +23,29 @@ router.get('/', async (req, res) => {
       const formattedSearch = cleanSearch.length === 11 ? 
         cleanSearch.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : search;
       
-      whereClause = 'WHERE nome ILIKE $1 OR cpf ILIKE $1 OR cpf ILIKE $2';
+      whereClause = 'WHERE p.nome ILIKE $1 OR p.cpf ILIKE $1 OR p.cpf ILIKE $2';
       queryParams.push(`%${search}%`, `%${formattedSearch}%`);
     }
 
-    const countQuery = `SELECT COUNT(*) FROM pacientes ${whereClause}`;
+    const countQuery = `SELECT COUNT(*) FROM pacientes p ${whereClause}`;
     const countResult = await query(countQuery, queryParams);
     const total = parseInt(countResult.rows[0].count);
 
     const dataQuery = `
-      SELECT id, nome, cpf, idade, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, created_at, updated_at 
-      FROM pacientes 
+      SELECT 
+        p.id, p.nome, p.cpf, p.idade, p.data_nascimento, p.numero_laudo, p.contexto, 
+        p.tipo_transito, p.escolaridade, p.telefone, p.email, p.endereco, p.observacoes, 
+        p.created_at, p.updated_at,
+        (
+          SELECT aptidao 
+          FROM avaliacoes 
+          WHERE paciente_id = p.id AND aptidao IS NOT NULL
+          ORDER BY data_aplicacao DESC, created_at DESC 
+          LIMIT 1
+        ) as ultima_aptidao
+      FROM pacientes p
       ${whereClause}
-      ORDER BY created_at DESC 
+      ORDER BY p.created_at DESC 
       LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}
     `;
 
@@ -66,7 +76,7 @@ router.get('/:id', async (req, res) => {
     const { id } = req.params;
 
     const result = await query(
-      'SELECT id, nome, cpf, idade, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, created_at, updated_at FROM pacientes WHERE id = $1',
+      'SELECT id, nome, cpf, idade, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, created_at, updated_at FROM pacientes WHERE id = $1',
       [id]
     );
 
@@ -90,9 +100,9 @@ router.get('/:id', async (req, res) => {
 // Criar paciente
 router.post('/', validate(pacienteSchema), async (req, res) => {
   try {
-    const { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email } = req.body;
+    const { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes } = req.body;
 
-    console.log('📝 Dados recebidos:', { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email });
+    console.log('📝 Dados recebidos:', { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes });
 
     // Verificar se o CPF já existe
     const existingPaciente = await query(
@@ -182,8 +192,6 @@ router.post('/', validate(pacienteSchema), async (req, res) => {
     }
 
     // Verificar se há telefone ou email duplicado para adicionar observação
-    let observacoes = req.body.observacoes || '';
-    
     if (telefone && req.body.allow_duplicate_phone) {
       const existingPhone = await query(
         'SELECT nome FROM pacientes WHERE telefone = $1',
@@ -211,8 +219,8 @@ router.post('/', validate(pacienteSchema), async (req, res) => {
     }
 
     const result = await query(
-      'INSERT INTO pacientes (nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes, created_at, updated_at',
-      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes]
+      'INSERT INTO pacientes (nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, created_at, updated_at',
+      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes]
     );
 
     res.status(201).json({
@@ -231,7 +239,7 @@ router.post('/', validate(pacienteSchema), async (req, res) => {
 router.put('/:id', validate(pacienteSchema), async (req, res) => {
   try {
     const { id } = req.params;
-    const { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes } = req.body;
+    const { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes } = req.body;
 
     // Verificar se o paciente existe
     const existingPaciente = await query(
@@ -258,8 +266,8 @@ router.put('/:id', validate(pacienteSchema), async (req, res) => {
     }
 
     const result = await query(
-      'UPDATE pacientes SET nome = $1, cpf = $2, data_nascimento = $3, numero_laudo = $4, contexto = $5, tipo_transito = $6, escolaridade = $7, telefone = $8, email = $9, observacoes = $10, updated_at = CURRENT_TIMESTAMP WHERE id = $11 RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes, created_at, updated_at',
-      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, observacoes, id]
+      'UPDATE pacientes SET nome = $1, cpf = $2, data_nascimento = $3, numero_laudo = $4, contexto = $5, tipo_transito = $6, escolaridade = $7, telefone = $8, email = $9, endereco = $10, observacoes = $11, updated_at = CURRENT_TIMESTAMP WHERE id = $12 RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, created_at, updated_at',
+      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, id]
     );
 
     res.json({

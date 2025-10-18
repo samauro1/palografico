@@ -50,6 +50,21 @@ export const authService = {
   verify: () => api.get('/auth/verify'),
 };
 
+export const usuariosService = {
+  list: () => api.get('/usuarios'),
+  create: (data: any) => api.post('/usuarios', data),
+  update: (id: string, data: any) => api.put(`/usuarios/${id}`, data),
+  delete: (id: string) => api.delete(`/usuarios/${id}`),
+  getPerfis: () => api.get('/usuarios/perfis/disponiveis'),
+  getPermissoes: (perfil: string) => api.get(`/usuarios/permissoes/${perfil}`),
+  updatePerfil: (data: any) => api.put('/usuarios/perfil/me', data),
+};
+
+export const configuracoesService = {
+  getClinica: () => api.get('/configuracoes/clinica'),
+  updateClinica: (data: any) => api.put('/configuracoes/clinica', data),
+};
+
 export const pacientesService = {
   list: (params?: Record<string, unknown>) => api.get<{ data: { data: { pacientes: Patient[]; pagination: any } } }>('/pacientes', { params }),
   get: (id: string) => api.get<ApiResponse<Patient>>(`/pacientes/${id}`),

@@ -2,6 +2,7 @@ export interface User {
   id: string;
   nome: string;
   email: string;
+  foto_url?: string | null;
 }
 
 export interface Patient {

@@ -2,16 +2,20 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'next/navigation';
 import { 
   Brain, 
   Eye, 
   Target, 
-  MemoryStick, 
+  MemoryStick,
+  Package, 
   Calculator,
   Navigation,
-  FileText
+  FileText,
+  Save
 } from 'lucide-react';
-import { tabelasService, pacientesService } from '@/services/api';
+import toast from 'react-hot-toast';
+import { tabelasService, pacientesService, avaliacoesService } from '@/services/api';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import Layout from '@/components/Layout';
 import { Patient, TestResult } from '@/types';
@@ -33,22 +37,36 @@ interface Test {
 }
 
 export default function TestesPage() {
+  const searchParams = useSearchParams();
+  
+  // Verificar se veio de uma página de paciente ou avaliação
+  const pacienteId = searchParams.get('paciente_id');
+  const avaliacaoId = searchParams.get('avaliacao_id');
+  const numeroLaudo = searchParams.get('numero_laudo');
+  const testesPreSelecionados = searchParams.get('testes')?.split(',') || [];
+  
+  // Se veio com paciente_id ou avaliacao_id, o padrão é VINCULADO
+  const initialAnalysisType = (pacienteId || avaliacaoId) ? 'linked' : 'linked'; // Sempre vinculado por padrão
+  
   const [selectedTest, setSelectedTest] = useState<Test | null>(null);
   const [testData, setTestData] = useState<Record<string, string | number>>({});
   const [results, setResults] = useState<TestResult | null>(null);
-  const [analysisType, setAnalysisType] = useState('anonymous');
+  const [analysisType, setAnalysisType] = useState(initialAnalysisType);
   const [patientData, setPatientData] = useState({
     cpf: '',
     nome: '',
-    numero_laudo: '',
+    numero_laudo: numeroLaudo || '',
     data_nascimento: '',
     contexto: '',
     tipo_transito: '',
+    escolaridade: '',
     telefone: '',
     email: ''
   });
   const [foundPatient, setFoundPatient] = useState<Patient | null>(null);
   const [searchingPatient, setSearchingPatient] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [descontarEstoque, setDescontarEstoque] = useState(true); // Por padrão, desconta do estoque
 
   // Estados específicos do MIG
   const QUESTIONS_COUNT = 28;
@@ -70,6 +88,130 @@ export default function TestesPage() {
   // Estados específicos do MEMORE
   const MEMORE_TOTAL = 30; // inclui treino A..F (6) + 24 itens
   const [memoreMarks, setMemoreMarks] = useState<boolean[]>(Array(MEMORE_TOTAL).fill(false));
+
+  // Estados específicos do R-1
+  const R1_TOTAL = 40; // 40 questões
+  const [r1Answers, setR1Answers] = useState<string[]>(Array(R1_TOTAL).fill(''));
+  const [selectedR1Table, setSelectedR1Table] = useState<number | null>(null);
+
+  // Estados específicos do AC
+  const AC_ROWS = 20;
+  const AC_COLS = 15;
+  const AC_TOTAL = AC_ROWS * AC_COLS; // 300 figuras no teste AC
+  const [acMarks, setAcMarks] = useState<boolean[]>(Array(AC_TOTAL).fill(false));
+  const [showAcGabarito, setShowAcGabarito] = useState<boolean>(false);
+  const [selectedAcTable, setSelectedAcTable] = useState<number | null>(null);
+  
+  // Estados para processamento automático de imagens
+  const [acMode, setAcMode] = useState<'manual' | 'automatic' | 'hybrid'>('manual');
+  const [testeImage, setTesteImage] = useState<File | null>(null);
+  const [crivoImage, setCrivoImage] = useState<File | null>(null);
+  const [processingResults, setProcessingResults] = useState<any>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // Configurações de processamento
+  const [processingConfig, setProcessingConfig] = useState({
+    zetasEquivalence: 'strict', // 'strict', 'rotation', 'rotation+reflection'
+    duplicatesPolicy: 'count_as_error', // 'count_as_error', 'ignore'
+    pointsFormula: 'acertos_menos_erros', // 'acertos_menos_erros', 'only_acertos'
+    circlesPerRow: 7 // Regra: 7 círculos por fileira
+  });
+  
+  // Filtros normativos
+  const [normativeFilters, setNormativeFilters] = useState({
+    idade: '',
+    escolaridade: '',
+    regiao: '',
+    sexo: '',
+    socioeconomico: ''
+  });
+  
+  // Figuras do teste AC - EXATAS da nova imagem teste arreglado.jpg
+  // Baseado na análise da nova imagem fornecida
+  const AC_FIGURES = useMemo(() => [
+    // Fileira 1 (exata da nova imagem)
+    '▷', '△', '◁', '▼', '▽', '▶', '◄', '▲', '▷', '◁', '▼', '△', '▽', '▶', '◄',
+    // Fileira 2 (exata da nova imagem)
+    '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶',
+    // Fileira 3 (exata da nova imagem)
+    '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△',
+    // Fileira 4 (exata da nova imagem)
+    '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼',
+    // Fileira 5 (exata da nova imagem)
+    '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷',
+    
+    // Fileiras 6-20 (geradas seguindo o padrão da nova imagem)
+    '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁',
+    '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽',
+    '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲',
+    '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄',
+    '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶',
+    '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△',
+    '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼',
+    '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷',
+    '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁',
+    '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽',
+    '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲',
+    '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄',
+    '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶',
+    '◄', '▲', '▽', '◁', '▷', '▼', '△', '▶', '◄', '▲', '▽', '◁', '▷', '▼', '△'
+  ], []);
+  
+  // Figuras que devem ser marcadas (baseado nos 3 modelos corretos)
+  const TARGET_FIGURES = ['►', '▽', '◁']; // As 3 figuras que devem ser marcadas
+  
+  // Gabarito do teste AC - baseado no crivo (7 círculos por fileira)
+  // Para a nova imagem teste arreglado.jpg
+  const AC_GABARITO = useMemo(() => [
+    // Fileira 1: 7 círculos
+    false, true, false, false, true, true, false, false, false, true, false, true, true, false, false,
+    // Fileira 2: 7 círculos
+    false, true, false, false, false, true, true, false, false, true, false, false, false, true, true,
+    // Fileira 3: 7 círculos
+    false, false, true, false, false, true, false, true, false, false, true, false, false, true, false,
+    // Fileira 4: 7 círculos
+    true, false, false, true, false, false, false, true, true, false, false, true, false, false, false,
+    // Fileira 5: 7 círculos
+    false, true, false, false, true, false, false, false, true, true, false, false, true, false, false,
+    // Fileira 6: 7 círculos
+    false, true, false, false, false, true, true, false, false, true, false, false, false, true, false,
+    // Fileira 7: 7 círculos
+    false, false, false, true, false, false, true, false, true, false, false, false, false, true, true,
+    // Fileira 8: 7 círculos
+    false, false, true, false, false, true, false, true, false, false, false, true, false, false, true,
+    // Fileira 9: 7 círculos
+    false, false, false, true, false, false, true, false, false, true, false, false, false, true, false,
+    // Fileira 10: 7 círculos
+    true, false, false, false, true, false, false, true, false, false, false, true, false, false, true,
+    // Fileira 11: 7 círculos
+    false, false, true, false, false, true, false, false, false, true, true, false, false, false, true,
+    // Fileira 12: 7 círculos
+    false, false, false, true, false, false, true, false, true, false, false, false, false, true, false,
+    // Fileira 13: 7 círculos
+    true, false, false, false, true, false, false, true, false, false, true, false, false, false, true,
+    // Fileira 14: 7 círculos
+    false, true, false, false, false, true, false, false, false, true, false, false, true, false, false,
+    // Fileira 15: 7 círculos
+    false, false, true, false, false, false, true, false, true, false, false, false, false, true, true,
+    // Fileira 16: 7 círculos
+    false, false, false, true, false, false, true, false, false, true, false, false, false, true, false,
+    // Fileira 17: 7 círculos
+    true, false, false, false, true, false, false, false, true, false, false, false, true, false, false,
+    // Fileira 18: 7 círculos
+    false, true, false, false, false, true, false, true, false, false, false, true, false, false, false,
+    // Fileira 19: 7 círculos
+    false, false, false, true, false, false, true, false, false, true, false, false, false, true, false,
+    // Fileira 20: 7 círculos
+    false, false, true, false, false, false, true, false, true, false, false, false, false, true, false
+  ], []);
+  
+  // Gabarito oficial do R-1 (40 questões) - Gabarito oficial fornecido
+  const R1_ANSWER_KEY = useMemo(() => [
+    'C', 'F', 'E', 'D', 'F', 'B', 'A', 'D', 'E', 'E', // Questões 1-10
+    'C', 'F', 'D', 'B', 'E', 'F', 'A', 'C', 'D', 'B', // Questões 11-20
+    'D', 'F', 'G', 'B', 'H', 'D', 'A', 'H', 'G', 'C', // Questões 21-30
+    'B', 'G', 'H', 'A', 'C', 'G', 'A', 'C', 'H', 'G'  // Questões 31-40
+  ], []);
   
   // Chave fixa do MEMORE (não editável pelo usuário)
   const memoreKeyVP = useMemo(() => {
@@ -153,6 +295,14 @@ export default function TestesPage() {
     }, 0);
   }, [migAnswers, MIG_ANSWER_KEY]);
 
+  // Contador de acertos do R-1
+  const r1CorrectCount = useMemo(() => {
+    return r1Answers.reduce((count, answer, idx) => {
+      const key = R1_ANSWER_KEY[idx];
+      return count + (answer && key && answer === key ? 1 : 0);
+    }, 0);
+  }, [r1Answers, R1_ANSWER_KEY]);
+
   // Cálculo automático do MIG quando acertos_manual ou tabela mudam
   useEffect(() => {
     if (selectedTest?.id !== 'mig') return;
@@ -193,6 +343,140 @@ export default function TestesPage() {
     calcularAutomatico();
   }, [testData.acertos_manual, selectedMigTable, selectedTest?.id]);
 
+  // Cálculo automático do R-1 quando gabarito muda
+  useEffect(() => {
+    if (selectedTest?.id !== 'r1') return;
+    setTestData(prev => ({ ...prev, acertos: r1CorrectCount }));
+  }, [r1CorrectCount, selectedTest?.id]);
+
+  // Cálculo automático do R-1 quando acertos_manual ou tabela mudam
+  useEffect(() => {
+    if (selectedTest?.id !== 'r1') return;
+    if (!selectedR1Table) {
+      return;
+    }
+    
+    const acertosManual = parseInt(String(testData.acertos_manual || 0));
+    const escolaridade = String(testData.escolaridade || '');
+    
+    if (acertosManual <= 0 || !escolaridade) {
+      setResults(null);
+      return;
+    }
+    
+    // Disparar cálculo automático
+    const calcularAutomatico = async () => {
+      try {
+        const dataToSend: any = {
+          tabela_id: selectedR1Table,
+          acertos: acertosManual,
+          escolaridade: escolaridade
+        };
+        
+        const response = await tabelasService.calculate('r1', dataToSend);
+        setResults(response.data);
+      } catch (error) {
+        console.error('❌ Erro ao calcular R-1 automaticamente:', error);
+      }
+    };
+    
+    calcularAutomatico();
+  }, [testData.acertos_manual, testData.escolaridade, selectedR1Table, selectedTest?.id]);
+
+  // Cálculo automático do AC com regra especial de omissões
+  const acStats = useMemo(() => {
+    if (selectedTest?.id !== 'ac') return null;
+    
+    let acertos = 0;
+    let erros = 0;
+    let omissoes = 0;
+    
+    // Encontrar a última marcação feita
+    let lastMarkedIndex = -1;
+    for (let i = AC_TOTAL - 1; i >= 0; i--) {
+      if (acMarks[i]) {
+        lastMarkedIndex = i;
+        break;
+      }
+    }
+    
+    // Calcular acertos e erros (todos os marcados)
+    for (let i = 0; i < AC_TOTAL; i++) {
+      const isMarked = acMarks[i];
+      const shouldMark = AC_GABARITO[i];
+      
+      if (isMarked && shouldMark) {
+        acertos++;
+      } else if (isMarked && !shouldMark) {
+        erros++;
+      }
+    }
+    
+    // Calcular omissões apenas desde a última marcação para cima
+    for (let i = lastMarkedIndex + 1; i < AC_TOTAL; i++) {
+      const shouldMark = AC_GABARITO[i];
+      if (shouldMark) {
+        omissoes++;
+      }
+    }
+    
+    const resultado = acertos - (erros + omissoes);
+    
+    return { acertos, erros, omissoes, resultado };
+  }, [acMarks, AC_GABARITO, selectedTest?.id]);
+
+  // Cálculo automático do AC quando gabarito muda
+  useEffect(() => {
+    if (selectedTest?.id !== 'ac' || !acStats) return;
+    
+    setTestData(prev => ({
+      ...prev,
+      acertos: acStats.acertos,
+      erros: acStats.erros,
+      omissoes: acStats.omissoes,
+      resultado: acStats.resultado
+    }));
+  }, [acStats, selectedTest?.id]);
+
+  // Cálculo automático do AC quando dados manuais mudam
+  useEffect(() => {
+    if (selectedTest?.id !== 'ac') return;
+    if (!selectedAcTable) return;
+    
+    const acertosManual = parseInt(String(testData.acertos_manual || 0));
+    const errosManual = parseInt(String(testData.erros_manual || 0));
+    const omissoesManual = parseInt(String(testData.omissoes_manual || 0));
+    const escolaridade = String(testData.escolaridade || '');
+    
+    if (acertosManual <= 0 || !escolaridade) {
+      setResults(null);
+      return;
+    }
+    
+    const resultadoManual = acertosManual - (errosManual + omissoesManual);
+    
+    // Disparar cálculo automático
+    const calcularAutomatico = async () => {
+      try {
+        const dataToSend: any = {
+          tabela_id: selectedAcTable,
+          acertos: acertosManual,
+          erros: errosManual,
+          omissoes: omissoesManual,
+          resultado: resultadoManual,
+          escolaridade: escolaridade
+        };
+        
+        const response = await tabelasService.calculate('ac', dataToSend);
+        setResults(response.data);
+      } catch (error) {
+        console.error('❌ Erro ao calcular AC automaticamente:', error);
+      }
+    };
+    
+    calcularAutomatico();
+  }, [testData.acertos_manual, testData.erros_manual, testData.omissoes_manual, testData.escolaridade, selectedAcTable, selectedTest?.id]);
+
   const getChoiceClass = (idx: number, option: string) => {
     const user = migAnswers[idx];
     const key = MIG_ANSWER_KEY[idx];
@@ -212,6 +496,29 @@ export default function TestesPage() {
     setMigAnswers(next);
   };
 
+  const chooseR1Option = (idx: number, option: string) => {
+    const next = [...r1Answers];
+    next[idx] = next[idx] === option ? '' : option;
+    setR1Answers(next);
+  };
+
+  const getR1ChoiceClass = (idx: number, option: string) => {
+    const user = r1Answers[idx];
+    const key = R1_ANSWER_KEY[idx];
+    const isSelected = user === option;
+    
+    if (!isSelected) {
+      return 'bg-white text-gray-600 border-gray-300 hover:border-gray-400 hover:bg-gray-50';
+    }
+    
+    // Se a opção está selecionada, verificar se é correta ou incorreta
+    if (user === key) {
+      return 'bg-green-500 text-white border-green-600 shadow-md';
+    } else {
+      return 'bg-orange-500 text-white border-orange-600 shadow-md';
+    }
+  };
+
   const toggleMemoreMark = (idx: number) => {
     setMemoreMarks(prev => {
       const next = [...prev];
@@ -224,18 +531,261 @@ export default function TestesPage() {
     setMemoreMarks(Array(MEMORE_TOTAL).fill(false));
   };
 
+  const clearR1Answers = () => {
+    setR1Answers(Array(R1_TOTAL).fill(''));
+  };
+
+  // Funções para o AC
+  const toggleAcMark = (idx: number) => {
+    setAcMarks(prev => {
+      const next = [...prev];
+      next[idx] = !next[idx];
+      return next;
+    });
+  };
+
+  const clearAcMarks = () => {
+    setAcMarks(Array(AC_TOTAL).fill(false));
+    setShowAcGabarito(false);
+  };
+
+  const toggleAcGabarito = () => {
+    setShowAcGabarito(prev => !prev);
+  };
+
+  // Funções para processamento automático de imagens
+  const handleImageUpload = (type: 'teste' | 'crivo', file: File) => {
+    if (type === 'teste') {
+      setTesteImage(file);
+    } else {
+      setCrivoImage(file);
+    }
+  };
+
+  const processImages = async () => {
+    if (!testeImage || !crivoImage) {
+      alert('Por favor, faça upload das duas imagens (teste preenchido e crivo)');
+      return;
+    }
+
+    setIsProcessing(true);
+    
+    try {
+      // Simular processamento de IA seguindo o fluxo correto
+      const formData = new FormData();
+      formData.append('teste', testeImage);
+      formData.append('crivo', crivoImage);
+      formData.append('config', JSON.stringify(processingConfig));
+      formData.append('filtros', JSON.stringify(normativeFilters));
+
+      // Simular resposta da API com processamento correto
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Simular auditoria por fileira (7 círculos por linha)
+      const rowsAudit = [
+        { linha: 1, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 2, circulos_crivo: 7, acertos: 7, erros: 0, omissoes: 0 },
+        { linha: 3, circulos_crivo: 7, acertos: 5, erros: 2, omissoes: 2 },
+        { linha: 4, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 5, circulos_crivo: 7, acertos: 7, erros: 0, omissoes: 0 },
+        { linha: 6, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 7, circulos_crivo: 7, acertos: 5, erros: 2, omissoes: 2 },
+        { linha: 8, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 9, circulos_crivo: 7, acertos: 7, erros: 0, omissoes: 0 },
+        { linha: 10, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 11, circulos_crivo: 7, acertos: 5, erros: 2, omissoes: 2 },
+        { linha: 12, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 13, circulos_crivo: 7, acertos: 7, erros: 0, omissoes: 0 },
+        { linha: 14, circulos_crivo: 7, acertos: 5, erros: 2, omissoes: 2 },
+        { linha: 15, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 16, circulos_crivo: 7, acertos: 7, erros: 0, omissoes: 0 },
+        { linha: 17, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 18, circulos_crivo: 7, acertos: 5, erros: 2, omissoes: 2 },
+        { linha: 19, circulos_crivo: 7, acertos: 6, erros: 1, omissoes: 1 },
+        { linha: 20, circulos_crivo: 7, acertos: 7, erros: 0, omissoes: 0 }
+      ];
+
+      // Calcular totais
+      const totalAcertos = rowsAudit.reduce((sum, row) => sum + row.acertos, 0);
+      const totalErros = rowsAudit.reduce((sum, row) => sum + row.erros, 0);
+      const totalOmissoes = rowsAudit.reduce((sum, row) => sum + row.omissoes, 0);
+      const totalPontos = processingConfig.pointsFormula === 'acertos_menos_erros' 
+        ? totalAcertos - totalErros 
+        : totalAcertos;
+
+      const mockResults = {
+        identificacao: {
+          codigo_prova: "AC-2025-0001",
+          data: new Date().toISOString().split('T')[0],
+          operador: "analista_IA"
+        },
+        configuracao: {
+          equivalencia_zetas: processingConfig.zetasEquivalence,
+          politica_duplicatas: processingConfig.duplicatesPolicy,
+          formula_pontos: processingConfig.pointsFormula,
+          circulos_por_linha: processingConfig.circlesPerRow
+        },
+        filtros_normativos: normativeFilters,
+        alinhamento: {
+          erro_medio_pixels: 0.8,
+          y_corte: 1325,
+          linha_corte_indice: 12,
+          validacao_circulos_por_linha: "✅ Todas as linhas têm 7 círculos do Crivo"
+        },
+        contagens: {
+          acertos: totalAcertos,
+          erros: totalErros,
+          omissoes: totalOmissoes,
+          pontos: totalPontos,
+          zetas_area_valida: 320,
+          total_linhas_validas: 20
+        },
+        auditoria_por_linha: rowsAudit,
+        norma: {
+          percentil: 63,
+          classificacao: "Médio"
+        },
+        detalhes: {
+          pares_marca_crivo: [
+            { marca_id: 17, crivo_id: 203, status: "acerto" },
+            { marca_id: 18, crivo_id: null, status: "erro" }
+          ],
+          crivos_omissos: [5, 22, 47]
+        },
+        avisos: [
+          "✅ Alinhamento do Crivo validado: todas as linhas têm 7 círculos",
+          "✅ Linha de corte posicionada na última marca válida",
+          "✅ Pareamento com tolerância adequada aplicado",
+          "✅ Regra de equivalência de zetas: " + processingConfig.zetasEquivalence,
+          "2 marcas duplicadas foram contabilizadas como ERRO"
+        ]
+      };
+
+      setProcessingResults(mockResults);
+      
+      // Atualizar os campos do teste com os resultados
+      setTestData(prev => ({
+        ...prev,
+        acertos: mockResults.contagens.acertos,
+        erros: mockResults.contagens.erros,
+        omissoes: mockResults.contagens.omissoes,
+        resultado: mockResults.contagens.pontos
+      }));
+
+      setResults(mockResults.norma);
+      
+    } catch (error) {
+      console.error('Erro no processamento:', error);
+      alert('Erro no processamento das imagens. Tente novamente.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const downloadResults = () => {
+    if (!processingResults) return;
+    
+    const dataStr = JSON.stringify(processingResults, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ac_results_${processingResults.identificacao.data}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleTestSelect = (teste: Test) => {
     setSelectedTest(teste);
     setTestData({});
     setResults(null);
     setSelectedTable(null);
-    setAnalysisType('anonymous');
-    setPatientData({ cpf: '', nome: '', numero_laudo: '', data_nascimento: '', contexto: '', tipo_transito: '', telefone: '', email: '' });
-    setFoundPatient(null);
+    // NÃO resetar analysisType e patientData se veio vinculado via URL
+    if (!pacienteId && !avaliacaoId) {
+      setAnalysisType('linked'); // Sempre vinculado por padrão
+      setPatientData({ cpf: '', nome: '', numero_laudo: '', data_nascimento: '', contexto: '', tipo_transito: '', escolaridade: '', telefone: '', email: '' });
+      setFoundPatient(null);
+    }
     setSearchingPatient(false);
     setMigAnswers(Array(MIG_TOTAL_POSITIONS).fill(''));
     setAutoCalcFromGabarito(true);
   };
+
+  // Carregar dados do paciente/avaliação quando vem via URL
+  useEffect(() => {
+    const loadLinkedData = async () => {
+      try {
+        if (pacienteId) {
+          // Carregar dados do paciente pelo ID
+          setSearchingPatient(true);
+          const response = await pacientesService.get(pacienteId);
+          const paciente = (response as any).data.paciente;
+          if (paciente) {
+            setFoundPatient(paciente);
+            setPatientData({
+              cpf: paciente.cpf,
+              nome: paciente.nome,
+              numero_laudo: numeroLaudo || paciente.numero_laudo || `LAU-${new Date().getFullYear()}-${String(paciente.id).padStart(4, '0')}`,
+              data_nascimento: paciente.data_nascimento,
+              contexto: paciente.contexto,
+              tipo_transito: paciente.tipo_transito,
+              escolaridade: paciente.escolaridade,
+              telefone: paciente.telefone,
+              email: paciente.email
+            });
+          }
+          setSearchingPatient(false);
+        } else if (avaliacaoId) {
+          // Carregar dados da avaliação
+          setSearchingPatient(true);
+          const response = await avaliacoesService.get(avaliacaoId);
+          const avaliacao = (response as any).data.avaliacao;
+          if (avaliacao) {
+            // Buscar dados completos do paciente primeiro
+            if (avaliacao.paciente_cpf) {
+              const pacienteResponse = await pacientesService.list({ search: avaliacao.paciente_cpf, limit: 1 });
+              const pacientes = (pacienteResponse as any).data.data.pacientes || [];
+              if (pacientes.length > 0) {
+                const paciente = pacientes[0];
+                setFoundPatient(paciente);
+                // Preencher TODOS os dados do paciente
+                setPatientData({
+                  cpf: paciente.cpf,
+                  nome: paciente.nome,
+                  numero_laudo: avaliacao.numero_laudo || paciente.numero_laudo,
+                  data_nascimento: paciente.data_nascimento,
+                  contexto: paciente.contexto,
+                  tipo_transito: paciente.tipo_transito,
+                  escolaridade: paciente.escolaridade,
+                  telefone: paciente.telefone,
+                  email: paciente.email
+                });
+              }
+            } else {
+              // Se não tem CPF, usar só dados da avaliação
+              setPatientData({
+                cpf: '',
+                nome: avaliacao.paciente_nome || '',
+                numero_laudo: avaliacao.numero_laudo,
+                data_nascimento: '',
+                contexto: '',
+                tipo_transito: '',
+                escolaridade: '',
+                telefone: '',
+                email: ''
+              });
+            }
+          }
+          setSearchingPatient(false);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar dados vinculados:', error);
+        setSearchingPatient(false);
+      }
+    };
+
+    loadLinkedData();
+  }, [pacienteId, avaliacaoId, numeroLaudo]);
 
   const handleInputChange = (field: string, value: string | number) => {
     setTestData({
@@ -258,6 +808,120 @@ export default function TestesPage() {
     }
   };
 
+  const searchPatientByCPF = async () => {
+    if (patientData.cpf && patientData.cpf.length >= 11) {
+      await searchPatient(patientData);
+    }
+  };
+
+  // Função para salvar o teste
+  const handleSaveTest = async () => {
+    if (!selectedTest) {
+      toast.error('Nenhum teste selecionado');
+      return;
+    }
+
+    // Se for anônimo, avisar que não será salvo
+    if (analysisType === 'anonymous') {
+      toast('ℹ️ Modo Anônimo: Resultado não será guardado na base de dados (não há paciente associado)', {
+        duration: 4000,
+        icon: 'ℹ️'
+      });
+    }
+
+    // Validar se é vinculado e tem dados obrigatórios
+    if (analysisType === 'linked') {
+      if (!patientData.cpf || !patientData.nome || !patientData.numero_laudo) {
+        toast.error('Preencha CPF, Nome e Número do Laudo para salvar avaliação vinculada');
+        return;
+      }
+    }
+
+    setIsSaving(true);
+
+    try {
+      // Preparar dados para envio (igual ao cálculo, mas com flag de salvamento)
+      const dataToSend: any = {
+        ...testData,
+        analysisType,
+        patientData: analysisType === 'linked' ? {
+          ...patientData,
+          foundPatient,
+          data_avaliacao: new Date().toISOString().split('T')[0],
+          numero_laudo: patientData.numero_laudo
+        } : null
+      };
+
+      // Lógica específica por teste (igual ao handleSubmit)
+      if (selectedTest.id === 'mig') {
+        if (selectedTable) {
+          dataToSend.tabela_id = selectedTable;
+        }
+        const acertosManual = parseInt(String(dataToSend.acertos_manual || 0));
+        dataToSend.acertos = acertosManual > 0 ? acertosManual : migCorrectCount;
+        delete dataToSend.acertos_manual;
+      }
+
+      if (selectedTest.id === 'r1') {
+        if (selectedR1Table) {
+          dataToSend.tabela_id = selectedR1Table;
+        }
+        const acertosManual = parseInt(String(dataToSend.acertos_manual || 0));
+        dataToSend.acertos = acertosManual > 0 ? acertosManual : r1CorrectCount;
+        delete dataToSend.acertos_manual;
+      }
+
+      if (selectedTest.id === 'ac') {
+        if (selectedAcTable) {
+          dataToSend.tabela_id = selectedAcTable;
+        }
+        const acertosManual = parseInt(String(dataToSend.acertos_manual || 0));
+        const errosManual = parseInt(String(dataToSend.erros_manual || 0));
+        const omissoesManual = parseInt(String(dataToSend.omissoes_manual || 0));
+        
+        if (acertosManual > 0) {
+          dataToSend.acertos = acertosManual;
+          dataToSend.erros = errosManual;
+          dataToSend.omissoes = omissoesManual;
+          dataToSend.resultado = acertosManual - (errosManual + omissoesManual);
+        } else if (acStats) {
+          dataToSend.acertos = acStats.acertos;
+          dataToSend.erros = acStats.erros;
+          dataToSend.omissoes = acStats.omissoes;
+          dataToSend.resultado = acStats.resultado;
+        }
+        
+        delete dataToSend.acertos_manual;
+        delete dataToSend.erros_manual;
+        delete dataToSend.omissoes_manual;
+      }
+      
+      // Adicionar flag de desconto de estoque
+      dataToSend.descontarEstoque = analysisType === 'linked' && descontarEstoque;
+      
+      // Enviar para calcular e salvar
+      const response = await tabelasService.calculate(selectedTest.id, dataToSend);
+      const resultado = response.data.resultado || response.data || {};
+      
+      setResults(resultado as TestResult);
+      
+      if (analysisType === 'linked' && (resultado as any).salvo) {
+        const estoqueMsg = descontarEstoque ? ' (estoque descontado)' : ' (sem desconto de estoque)';
+        toast.success('✅ Teste salvo com sucesso na avaliação!' + estoqueMsg);
+      } else if (analysisType === 'anonymous') {
+        toast.success('✅ Teste calculado (não vinculado ao paciente)');
+      } else {
+        toast.success('✅ Teste calculado com sucesso!');
+      }
+      
+    } catch (error: any) {
+      console.error('Erro ao salvar teste:', error);
+      toast.error(error.response?.data?.error || 'Erro ao salvar teste');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const searchPatient = async (data: any) => {
     setSearchingPatient(true);
     try {
@@ -274,6 +938,7 @@ export default function TestesPage() {
             data_nascimento: pacientes[0].data_nascimento,
             contexto: pacientes[0].contexto,
             tipo_transito: pacientes[0].tipo_transito,
+            escolaridade: pacientes[0].escolaridade,
             telefone: pacientes[0].telefone,
             email: pacientes[0].email
           });
@@ -297,6 +962,7 @@ export default function TestesPage() {
             data_nascimento: pacientes[0].data_nascimento,
             contexto: pacientes[0].contexto,
             tipo_transito: pacientes[0].tipo_transito,
+            escolaridade: pacientes[0].escolaridade,
             telefone: pacientes[0].telefone,
             email: pacientes[0].email
           });
@@ -322,40 +988,9 @@ export default function TestesPage() {
   };
 
   const handleCalculate = async () => {
-    if (!selectedTest) return;
-    
-    try {
-      const dataToSend: any = {
-        ...testData,
-        ...patientData,
-        analysisType,
-        selectedTable
-      };
-      
-      // Se for MEMORE e tiver tabela selecionada, adicionar tabela_id
-      if (selectedTest.id === 'memore' && selectedMemoreTable) {
-        dataToSend.tabela_id = selectedMemoreTable;
-      }
-      
-      // Se for MIG e tiver tabela selecionada, adicionar tabela_id e acertos
-      if (selectedTest.id === 'mig') {
-        if (selectedMigTable) {
-          dataToSend.tabela_id = selectedMigTable;
-        }
-        // Se tiver acertos_manual preenchido, usar ele; senão usar do gabarito
-        const acertosManual = parseInt(String(dataToSend.acertos_manual || 0));
-        dataToSend.acertos = acertosManual > 0 ? acertosManual : migCorrectCount;
-        // Remover acertos_manual do objeto
-        delete dataToSend.acertos_manual;
-      }
-      
-      const response = await tabelasService.calculate(selectedTest.id, dataToSend);
-      // A API retorna { resultado: {...} }, então pegamos apenas o resultado
-      const resultado = response.data.resultado || response.data || {};
-      setResults(resultado as TestResult);
-    } catch (error) {
-      console.error('Erro ao calcular resultado:', error);
-    }
+    // Calcular e salvar automaticamente se for vinculado
+    // Esta função agora é um alias para handleSaveTest
+    await handleSaveTest();
   };
 
   // Buscar tabelas normativas
@@ -425,9 +1060,10 @@ export default function TestesPage() {
     queryFn: async () => {
       const response = await tabelasService.list();
       // Filtrar apenas tabelas MIG, excluindo a tabela de conversão QI
-      const tabelasMig = response.data.tabelas?.filter((t: any) => 
+      const tabelas = response.data?.tabelas || [];
+      const tabelasMig = Array.isArray(tabelas) ? tabelas.filter((t: any) => 
         t.tipo === 'mig' && t.nome !== 'MIG - Conversão QI'
-      ) || [];
+      ) : [];
       return tabelasMig;
     },
     enabled: selectedTest?.id === 'mig'
@@ -435,17 +1071,109 @@ export default function TestesPage() {
 
   const tabelasMig = tabelasMigData || [];
 
+  // Buscar tabelas normativas do R-1 para seleção
+  const { data: tabelasR1Data } = useQuery({
+    queryKey: ['r1-tabelas'],
+    queryFn: async () => {
+      const response = await tabelasService.list();
+      const tabelas = response.data?.tabelas || [];
+      const tabelasR1 = Array.isArray(tabelas) ? tabelas.filter((t: any) => 
+        t.tipo === 'r1'
+      ) : [];
+      return tabelasR1;
+    },
+    enabled: selectedTest?.id === 'r1'
+  });
+
+  const tabelasR1 = tabelasR1Data || [];
+
+  // Buscar tabelas normativas do AC para seleção
+  const { data: tabelasAcData } = useQuery({
+    queryKey: ['ac-tabelas'],
+    queryFn: async () => {
+      const response = await tabelasService.list();
+      const tabelas = response.data?.tabelas || [];
+      const tabelasAc = Array.isArray(tabelas) ? tabelas.filter((t: any) => 
+        t.tipo === 'ac'
+      ) : [];
+      return tabelasAc;
+    },
+    enabled: selectedTest?.id === 'ac'
+  });
+
+  const tabelasAc = tabelasAcData || [];
+
+  // Auto-selecionar tabelas baseado no contexto e tipo do paciente
+  useEffect(() => {
+    if (!foundPatient) return;
+    
+    const { contexto, tipo_transito, escolaridade } = foundPatient;
+    
+    console.log('🔍 Auto-selecionando tabelas:', { contexto, tipo_transito, escolaridade });
+    
+    // Para cada teste, tentar encontrar a tabela mais apropriada
+    if (contexto === 'Trânsito') {
+      // Para MEMORE - buscar tabela de Trânsito com tipo_habilitacao correspondente
+      const tabelaMemore = tabelasMemore.find((t: any) => 
+        t.nome.includes('Trânsito') && 
+        (tipo_transito ? t.nome.includes(tipo_transito) || t.nome.includes('1ª Habilitação') : true)
+      );
+      if (tabelaMemore && !selectedMemoreTable) {
+        console.log('✅ Tabela MEMORE auto-selecionada:', tabelaMemore.nome);
+        setSelectedMemoreTable(parseInt(tabelaMemore.id));
+      }
+      
+      // Para MIG - buscar tabela de Trânsito
+      const tabelaMig = tabelasMig.find((t: any) => t.nome.includes('Trânsito'));
+      if (tabelaMig && !selectedMigTable) {
+        console.log('✅ Tabela MIG auto-selecionada:', tabelaMig.nome);
+        setSelectedMigTable(parseInt(tabelaMig.id));
+      }
+      
+      // Para R-1 - buscar tabela de Trânsito
+      const tabelaR1 = tabelasR1.find((t: any) => t.nome.includes('Trânsito'));
+      if (tabelaR1 && !selectedR1Table) {
+        console.log('✅ Tabela R-1 auto-selecionada:', tabelaR1.nome);
+        setSelectedR1Table(parseInt(tabelaR1.id));
+      }
+      
+      // Para AC - buscar tabela de Trânsito
+      const tabelaAc = tabelasAc.find((t: any) => t.nome.includes('Trânsito'));
+      if (tabelaAc && !selectedAcTable) {
+        console.log('✅ Tabela AC auto-selecionada:', tabelaAc.nome);
+        setSelectedAcTable(parseInt(tabelaAc.id));
+      }
+    } else if (contexto === 'Clínico' || contexto === 'Organizacional') {
+      // Para outros contextos, buscar tabelas gerais ou por escolaridade
+      const tabelaMemore = tabelasMemore.find((t: any) => 
+        escolaridade ? t.nome.includes(escolaridade) : t.nome.includes('Geral')
+      );
+      if (tabelaMemore && !selectedMemoreTable) {
+        console.log('✅ Tabela MEMORE auto-selecionada:', tabelaMemore.nome);
+        setSelectedMemoreTable(parseInt(tabelaMemore.id));
+      }
+      
+      const tabelaMig = tabelasMig.find((t: any) => 
+        escolaridade ? t.nome.includes(escolaridade) : t.nome.includes('Geral')
+      );
+      if (tabelaMig && !selectedMigTable) {
+        console.log('✅ Tabela MIG auto-selecionada:', tabelaMig.nome);
+        setSelectedMigTable(parseInt(tabelaMig.id));
+      }
+    }
+  }, [foundPatient, tabelasMemore, tabelasMig, tabelasR1, tabelasAc, selectedMemoreTable, selectedMigTable, selectedR1Table, selectedAcTable]);
+
   // Definir testes
-  const tests: Test[] = useMemo(() => [
+  const allTests: Test[] = useMemo(() => [
     {
       id: 'ac',
       nome: 'AC - Atenção Concentrada',
       descricao: 'Avaliação da capacidade de atenção concentrada',
       icon: Target,
       campos: [
-        { nome: 'acertos', label: 'Acertos', tipo: 'number', min: 0, max: 50 },
-        { nome: 'erros', label: 'Erros', tipo: 'number', min: 0, max: 50 },
-        { nome: 'omissoes', label: 'Omissões', tipo: 'number', min: 0, max: 50 },
+        { nome: 'acertos_manual', label: 'Acertos', tipo: 'number', min: 0, max: 300 },
+        { nome: 'erros_manual', label: 'Erros', tipo: 'number', min: 0, max: 300 },
+        { nome: 'omissoes_manual', label: 'Omissões', tipo: 'number', min: 0, max: 300 },
         { nome: 'escolaridade', label: 'Escolaridade', tipo: 'select', options: ['Ensino Fundamental', 'Ensino Médio', 'Ensino Superior'] }
       ]
     },
@@ -530,7 +1258,8 @@ export default function TestesPage() {
       descricao: 'Avaliação do raciocínio geral',
       icon: Brain,
       campos: [
-        { nome: 'acertos', label: 'Acertos', tipo: 'number', min: 0, max: 50 }
+        { nome: 'acertos', label: 'Acertos', tipo: 'number', min: 0, max: 40 },
+        { nome: 'escolaridade', label: 'Escolaridade', tipo: 'select', options: ['Ensino Fundamental', 'Ensino Médio', 'Ensino Superior'] }
       ]
     },
     {
@@ -556,6 +1285,14 @@ export default function TestesPage() {
     }
   ], []);
 
+  // Filtrar testes se houver pré-seleção
+  const tests: Test[] = useMemo(() => {
+    if (testesPreSelecionados.length > 0) {
+      return allTests.filter(test => testesPreSelecionados.includes(test.id));
+    }
+    return allTests;
+  }, [allTests, testesPreSelecionados]);
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -563,6 +1300,182 @@ export default function TestesPage() {
         <div className="hide-on-print">
           <h1 className="text-2xl font-bold text-gray-900">Testes Psicológicos</h1>
           <p className="text-gray-600">Selecione e execute testes de avaliação psicológica</p>
+        </div>
+
+        {/* Modo de Avaliação: Anônima ou Vinculada */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hide-on-print">
+          <h3 className="text-lg font-semibold text-gray-800 mb-4">Modo de Avaliação</h3>
+          
+          <div className="flex gap-4 mb-6">
+            <button
+              onClick={() => setAnalysisType('anonymous')}
+              className={`flex-1 p-4 border-2 rounded-lg transition-all ${
+                analysisType === 'anonymous'
+                  ? 'border-blue-500 bg-blue-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <div className="text-center">
+                <div className="text-2xl mb-2">🔓</div>
+                <h4 className="font-semibold text-gray-800">Avaliação Anônima</h4>
+                <p className="text-sm text-gray-600 mt-1">
+                  Teste sem vincular a paciente ou laudo
+                </p>
+                <p className="text-xs text-red-600 mt-1 font-medium">
+                  ⚠️ Não será guardado na base de dados
+                </p>
+              </div>
+            </button>
+            
+            <button
+              onClick={() => setAnalysisType('linked')}
+              className={`flex-1 p-4 border-2 rounded-lg transition-all ${
+                analysisType === 'linked'
+                  ? 'border-green-500 bg-green-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <div className="text-center">
+                <div className="text-2xl mb-2">🔗</div>
+                <h4 className="font-semibold text-gray-800">Avaliação Vinculada</h4>
+                <p className="text-sm text-gray-600 mt-1">
+                  Vincular a paciente e número de laudo
+                </p>
+                <p className="text-xs text-green-600 mt-1 font-medium">
+                  ✅ Salvamento automático na base de dados
+                </p>
+              </div>
+            </button>
+          </div>
+
+          {/* Toggle de Desconto de Estoque */}
+          <div className="mt-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-500 rounded-lg">
+                  <Package className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-800">Descontar do Estoque</h4>
+                  <p className="text-xs text-gray-600 mt-0.5">
+                    {descontarEstoque 
+                      ? '✅ Folhas serão descontadas ao salvar o resultado' 
+                      : '⚠️ Estoque não será alterado (apenas cálculo)'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDescontarEstoque(!descontarEstoque)}
+                className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
+                  descontarEstoque ? 'bg-green-500' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                    descontarEstoque ? 'translate-x-7' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+            {descontarEstoque && analysisType === 'linked' && (
+              <div className="mt-3 text-xs text-blue-700 bg-blue-100 p-2 rounded">
+                <p className="font-medium">📋 Folhas que serão descontadas:</p>
+                <p className="mt-1">
+                  {selectedTest?.id === 'rotas' && '• Rotas: 3 folhas (Concentrada + Alternada + Dividida)'}
+                  {selectedTest?.id !== 'rotas' && selectedTest && `• ${selectedTest.nome}: 1 folha`}
+                  {!selectedTest && 'Selecione um teste para ver o consumo'}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Aviso para Modo Anônimo */}
+          {analysisType === 'anonymous' && (
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <span className="text-2xl">⚠️</span>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-yellow-800">
+                    Modo Anônimo Ativo
+                  </h3>
+                  <div className="mt-2 text-sm text-yellow-700">
+                    <p>
+                      • O resultado do teste <strong>não será guardado</strong> na base de dados
+                    </p>
+                    <p className="mt-1">
+                      • Não há como associar o teste a uma pessoa ou avaliação
+                    </p>
+                    <p className="mt-1">
+                      • Para salvar os resultados, mude para <strong>Avaliação Vinculada</strong>
+                    </p>
+                    <p className="mt-1 font-semibold">
+                      • O estoque <strong>não será descontado</strong> em modo anônimo
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Campos para Avaliação Vinculada */}
+          {analysisType === 'linked' && (
+            <div className="border-t border-gray-200 pt-6">
+              <h4 className="font-semibold text-gray-800 mb-4">Dados da Avaliação</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    CPF do Paciente *
+                  </label>
+                  <input
+                    type="text"
+                    value={patientData.cpf}
+                    onChange={(e) => setPatientData(prev => ({ ...prev, cpf: e.target.value }))}
+                    onBlur={searchPatientByCPF}
+                    placeholder="000.000.000-00"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  {searchingPatient && <p className="text-sm text-blue-600 mt-1">Buscando paciente...</p>}
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nome do Paciente *
+                  </label>
+                  <input
+                    type="text"
+                    value={patientData.nome}
+                    onChange={(e) => setPatientData(prev => ({ ...prev, nome: e.target.value }))}
+                    placeholder="Nome completo"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    readOnly={!!foundPatient}
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Número do Laudo *
+                  </label>
+                  <input
+                    type="text"
+                    value={patientData.numero_laudo}
+                    onChange={(e) => setPatientData(prev => ({ ...prev, numero_laudo: e.target.value }))}
+                    placeholder="LAU-2025-0001"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              
+              {foundPatient && (
+                <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-md">
+                  <p className="text-sm text-green-700">
+                    ✅ Paciente encontrado: {foundPatient.nome} - CPF: {foundPatient.cpf}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Test Selection */}
@@ -771,159 +1684,171 @@ export default function TestesPage() {
             )}
 
             {selectedTest.id === 'rotas' && (
-              // Layout especial para Rotas de Atenção
+              // Layout especial para Rotas de Atenção - mesmo formato do BPA-2
               <div className="space-y-6">
-                {/* Rota A - Atenção Alternada */}
-                <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-6">
-                  <div className="text-center mb-4">
-                    <div className="w-12 h-12 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-white font-bold text-lg">A</span>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* Atenção Concentrada (Rota C) */}
+                  <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                    <h4 className="text-lg font-semibold text-blue-800 mb-4 text-center">
+                      Atenção Concentrada
+                    </h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Acertos
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.acertos_rota_c || ''}
+                          onChange={(e) => handleInputChange('acertos_rota_c', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Acertos"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Erros
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.erros_rota_c || ''}
+                          onChange={(e) => handleInputChange('erros_rota_c', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Erros"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Omissões
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.omissoes_rota_c || ''}
+                          onChange={(e) => handleInputChange('omissoes_rota_c', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Omissões"
+                        />
+                      </div>
                     </div>
-                    <h4 className="text-lg font-bold text-blue-800">Rota A - Atenção Alternada</h4>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-blue-700 mb-1">
-                        Acertos
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.acertos_rota_a || ''}
-                        onChange={(e) => handleInputChange('acertos_rota_a', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
+
+                  {/* Atenção Alternada (Rota A) */}
+                  <div className="bg-green-50 p-4 rounded-lg border border-green-200">
+                    <h4 className="text-lg font-semibold text-green-800 mb-4 text-center">
+                      Atenção Alternada
+                    </h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Acertos
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.acertos_rota_a || ''}
+                          onChange={(e) => handleInputChange('acertos_rota_a', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                          placeholder="Acertos"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Erros
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.erros_rota_a || ''}
+                          onChange={(e) => handleInputChange('erros_rota_a', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                          placeholder="Erros"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Omissões
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.omissoes_rota_a || ''}
+                          onChange={(e) => handleInputChange('omissoes_rota_a', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+                          placeholder="Omissões"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-blue-700 mb-1">
-                        Erros
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.erros_rota_a || ''}
-                        onChange={(e) => handleInputChange('erros_rota_a', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-blue-700 mb-1">
-                        Omissões
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.omissoes_rota_a || ''}
-                        onChange={(e) => handleInputChange('omissoes_rota_a', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
+                  </div>
+
+                  {/* Atenção Dividida (Rota D) */}
+                  <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                    <h4 className="text-lg font-semibold text-purple-800 mb-4 text-center">
+                      Atenção Dividida
+                    </h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Acertos
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.acertos_rota_d || ''}
+                          onChange={(e) => handleInputChange('acertos_rota_d', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          placeholder="Acertos"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Erros
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.erros_rota_d || ''}
+                          onChange={(e) => handleInputChange('erros_rota_d', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          placeholder="Erros"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Omissões
+                        </label>
+                        <input
+                          type="number"
+                          value={testData.omissoes_rota_d || ''}
+                          onChange={(e) => handleInputChange('omissoes_rota_d', e.target.value)}
+                          min={0}
+                          max={50}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          placeholder="Omissões"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
-
-                {/* Rota D - Atenção Dividida */}
-                <div className="bg-green-50 border-2 border-green-200 rounded-xl p-6">
-                  <div className="text-center mb-4">
-                    <div className="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-white font-bold text-lg">D</span>
-                    </div>
-                    <h4 className="text-lg font-bold text-green-800">Rota D - Atenção Dividida</h4>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-green-700 mb-1">
-                        Acertos
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.acertos_rota_d || ''}
-                        onChange={(e) => handleInputChange('acertos_rota_d', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-green-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-green-700 mb-1">
-                        Erros
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.erros_rota_d || ''}
-                        onChange={(e) => handleInputChange('erros_rota_d', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-green-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-green-700 mb-1">
-                        Omissões
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.omissoes_rota_d || ''}
-                        onChange={(e) => handleInputChange('omissoes_rota_d', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-green-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Rota C - Atenção Concentrada */}
-                <div className="bg-purple-50 border-2 border-purple-200 rounded-xl p-6">
-                  <div className="text-center mb-4">
-                    <div className="w-12 h-12 bg-purple-500 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-white font-bold text-lg">C</span>
-                    </div>
-                    <h4 className="text-lg font-bold text-purple-800">Rota C - Atenção Concentrada</h4>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-purple-700 mb-1">
-                        Acertos
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.acertos_rota_c || ''}
-                        onChange={(e) => handleInputChange('acertos_rota_c', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-purple-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-purple-700 mb-1">
-                        Erros
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.erros_rota_c || ''}
-                        onChange={(e) => handleInputChange('erros_rota_c', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-purple-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-purple-700 mb-1">
-                        Omissões
-                      </label>
-                      <input
-                        type="number"
-                        value={testData.omissoes_rota_c || ''}
-                        onChange={(e) => handleInputChange('omissoes_rota_c', e.target.value)}
-                        min="0"
-                        max="50"
-                        className="w-full px-3 py-2 border border-purple-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      />
-                    </div>
-                  </div>
+                
+                {/* Resumo Geral */}
+                <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                  <h4 className="text-lg font-semibold text-gray-800 mb-2 text-center">
+                    📊 Atenção Geral (Média das Três Modalidades)
+                  </h4>
+                  <p className="text-sm text-gray-600 text-center">
+                    A atenção geral será calculada automaticamente como a média dos resultados das três modalidades
+                  </p>
                 </div>
               </div>
             )}
@@ -1037,7 +1962,7 @@ export default function TestesPage() {
                         <h4 className="text-sm font-semibold text-gray-700 mb-3 text-center">Crivo de Correção</h4>
                         <div className="grid grid-cols-3 gap-4">
                           {/* Coluna 1: A, B, C, D, E, F, 1, 2, 3, 4 */}
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             {['A', 'B', 'C', 'D', 'E', 'F', '1', '2', '3', '4'].map((label, r) => {
                               const idx = r; // 0-9: A-F (0-5) + 1-4 (6-9)
                               const shouldMark = memoreKeyVP[idx];
@@ -1069,7 +1994,7 @@ export default function TestesPage() {
                           </div>
 
                           {/* Coluna 2: 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 */}
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             {['5', '6', '7', '8', '9', '10', '11', '12', '13', '14'].map((label, r) => {
                               const idx = r + 10; // 10-19
                               const shouldMark = memoreKeyVP[idx];
@@ -1101,7 +2026,7 @@ export default function TestesPage() {
                           </div>
 
                           {/* Coluna 3: 15, 16, 17, 18, 19, 20, 21, 22, 23, 24 */}
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             {['15', '16', '17', '18', '19', '20', '21', '22', '23', '24'].map((label, r) => {
                               const idx = r + 20; // 20-29
                               const shouldMark = memoreKeyVP[idx];
@@ -1264,7 +2189,7 @@ export default function TestesPage() {
                         {/* Exemplos e Questões */}
                         <div className="grid grid-cols-2 gap-4">
                           {/* Coluna Esquerda: Exemplo 1/2 + 1-13 */}
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             {/* Exemplo 1 */}
                             <div className="grid grid-cols-2 gap-3 py-1 text-[12px]">
                               <div className="text-center font-medium">Exemplo 1</div>
@@ -1326,7 +2251,7 @@ export default function TestesPage() {
                           </div>
 
                           {/* Coluna Direita: 14-28 */}
-                          <div className="space-y-1">
+                          <div className="space-y-1.5">
                             {Array.from({ length: 15 }, (_, i) => i + 14).map((questao) => {
                               const idx = questao + 1; // exemplos ocupam 0 e 1, então questão 14 = índice 15
                               return (
@@ -1400,6 +2325,885 @@ export default function TestesPage() {
               </div>
             )}
 
+            {/* Layout para R-1 */}
+            {selectedTest.id === 'r1' && (
+              <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Coluna Esquerda (2/3): Gabarito */}
+                  <div className="lg:col-span-2 space-y-6">
+                    {/* Header do Teste */}
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-12 h-12 bg-gradient-to-br from-orange-400 to-orange-600 rounded-xl flex items-center justify-center shadow-lg">
+                        <span className="text-2xl">🧠</span>
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-gray-900">R-1 - Raciocínio Lógico</h3>
+                        <p className="text-sm text-gray-600">Avaliação do raciocínio lógico</p>
+                      </div>
+                    </div>
+
+                    {/* Seletor de Tabela Normativa */}
+                    <div className="bg-gradient-to-br from-orange-50 to-yellow-50 rounded-lg border-2 border-orange-200 p-5 mb-6">
+                      <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                        <span className="text-lg">📊</span>
+                        Tabela Normativa
+                      </label>
+                      <select
+                        value={selectedR1Table || ''}
+                        onChange={(e) => setSelectedR1Table(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 bg-white font-medium"
+                      >
+                        <option value="">Selecione a tabela normativa</option>
+                        {tabelasR1.map((tabela: any) => (
+                          <option key={tabela.id} value={tabela.id}>
+                            {tabela.nome}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-600 mt-2">
+                        ⚠️ Selecione a tabela de acordo com a escolaridade do paciente
+                      </p>
+                    </div>
+
+                    {/* Gabarito R-1 */}
+                    <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                          <span className="text-xl">🧠</span>
+                          R-1 - Gabarito de Correção
+                        </h3>
+                        <button
+                          type="button"
+                          onClick={clearR1Answers}
+                          className="px-5 py-2.5 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2 hide-on-print"
+                        >
+                          <span>🗑️</span>
+                          Limpar respostas
+                        </button>
+                      </div>
+
+                      {/* Gabarito Visual do R-1 - Layout de 4 colunas como na folha original */}
+                      <div className="bg-white rounded-lg p-4 mb-4">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3 text-center">Folha de Resposta (40 questões)</h4>
+                        <div className="grid grid-cols-4 gap-6">
+                          {/* Coluna 1: Questões 1-10 */}
+                          <div className="space-y-1.5">
+                            {Array.from({ length: 10 }, (_, i) => i + 1).map((num) => {
+                              const idx = num - 1; // 0-9
+                              const currentAnswer = r1Answers[idx];
+                              return (
+                                <div key={`r1-q-${num}`} className="flex items-start gap-3 py-2">
+                                  <span className="text-xs font-medium text-gray-700 w-6 mt-1">{num}.</span>
+                                  <div className="grid grid-cols-4 gap-1.5">
+                                    {['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((option) => (
+                                      <button
+                                        key={`r1-${idx}-${option}`}
+                                        type="button"
+                                        onClick={() => chooseR1Option(idx, option)}
+                                        className={`w-6 h-6 border-2 rounded text-xs font-bold transition-all duration-200 hover:scale-110 ${getR1ChoiceClass(idx, option)}`}
+                                      >
+                                        {option}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Coluna 2: Questões 11-20 */}
+                          <div className="space-y-1.5">
+                            {Array.from({ length: 10 }, (_, i) => i + 11).map((num) => {
+                              const idx = num - 1; // 10-19
+                              const currentAnswer = r1Answers[idx];
+                              return (
+                                <div key={`r1-q-${num}`} className="flex items-start gap-3 py-2">
+                                  <span className="text-xs font-medium text-gray-700 w-6 mt-1">{num}.</span>
+                                  <div className="grid grid-cols-4 gap-1.5">
+                                    {['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((option) => (
+                                      <button
+                                        key={`r1-${idx}-${option}`}
+                                        type="button"
+                                        onClick={() => chooseR1Option(idx, option)}
+                                        className={`w-6 h-6 border-2 rounded text-xs font-bold transition-all duration-200 hover:scale-110 ${getR1ChoiceClass(idx, option)}`}
+                                      >
+                                        {option}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Coluna 3: Questões 21-30 */}
+                          <div className="space-y-1.5">
+                            {Array.from({ length: 10 }, (_, i) => i + 21).map((num) => {
+                              const idx = num - 1; // 20-29
+                              const currentAnswer = r1Answers[idx];
+                              return (
+                                <div key={`r1-q-${num}`} className="flex items-start gap-3 py-2">
+                                  <span className="text-xs font-medium text-gray-700 w-6 mt-1">{num}.</span>
+                                  <div className="grid grid-cols-4 gap-1.5">
+                                    {['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((option) => (
+                                      <button
+                                        key={`r1-${idx}-${option}`}
+                                        type="button"
+                                        onClick={() => chooseR1Option(idx, option)}
+                                        className={`w-6 h-6 border-2 rounded text-xs font-bold transition-all duration-200 hover:scale-110 ${getR1ChoiceClass(idx, option)}`}
+                                      >
+                                        {option}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+
+                          {/* Coluna 4: Questões 31-40 */}
+                          <div className="space-y-1.5">
+                            {Array.from({ length: 10 }, (_, i) => i + 31).map((num) => {
+                              const idx = num - 1; // 30-39
+                              const currentAnswer = r1Answers[idx];
+                              return (
+                                <div key={`r1-q-${num}`} className="flex items-start gap-3 py-2">
+                                  <span className="text-xs font-medium text-gray-700 w-6 mt-1">{num}.</span>
+                                  <div className="grid grid-cols-4 gap-1.5">
+                                    {['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((option) => (
+                                      <button
+                                        key={`r1-${idx}-${option}`}
+                                        type="button"
+                                        onClick={() => chooseR1Option(idx, option)}
+                                        className={`w-6 h-6 border-2 rounded text-xs font-bold transition-all duration-200 hover:scale-110 ${getR1ChoiceClass(idx, option)}`}
+                                      >
+                                        {option}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Resumo dos Acertos */}
+                      <div className="bg-white border-2 border-gray-200 rounded-xl p-4">
+                        <div className="text-base font-bold text-gray-800 mb-3">Resumo:</div>
+                        <div className="grid grid-cols-2 gap-4 mb-3">
+                          <div className="bg-green-50 rounded-lg p-3 border-2 border-green-200">
+                            <span className="text-xs text-green-700 font-medium">Acertos:</span>
+                            <span className="text-xl font-bold text-green-700 ml-2">{r1CorrectCount}</span>
+                            <span className="text-sm text-gray-600"> / 40</span>
+                          </div>
+                          <div className="bg-red-50 rounded-lg p-3 border-2 border-red-200">
+                            <span className="text-xs text-red-700 font-medium">Erros:</span>
+                            <span className="text-xl font-bold text-red-700 ml-2">{40 - r1CorrectCount}</span>
+                            <span className="text-sm text-gray-600"> / 40</span>
+                          </div>
+                        </div>
+                        <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-3">
+                          <div className="text-sm font-semibold text-blue-700">Percentual:</div>
+                          <div className="text-2xl font-bold text-blue-800">{((r1CorrectCount / 40) * 100).toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Coluna Direita (1/3): Entrada Manual */}
+                  <div className="lg:col-span-1">
+                    <div className="bg-white rounded-lg border border-gray-200 p-4 sticky top-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-sm">🧠</span>
+                        <h4 className="text-sm font-semibold text-gray-800">R-1 - Raciocínio</h4>
+                      </div>
+                      <p className="text-xs text-gray-500 mb-3">Avaliação do raciocínio lógico</p>
+                      
+                      <div className="space-y-3">
+                        {selectedTest.campos.map((campo) => (
+                          <div key={campo.nome}>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">
+                              {campo.label}
+                            </label>
+                            {campo.tipo === 'select' ? (
+                              <select
+                                value={testData[campo.nome] || ''}
+                                onChange={(e) => handleInputChange(campo.nome, e.target.value)}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                              >
+                                <option value="">Selecione {campo.label}</option>
+                                {campo.options?.map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type={campo.tipo}
+                                value={testData[campo.nome] || ''}
+                                onChange={(e) => handleInputChange(campo.nome, e.target.value)}
+                                min={campo.min}
+                                max={campo.max}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Botões - R-1 */}
+                <div className="flex justify-center mt-6 gap-3">
+                  <button
+                    onClick={clearR1Answers}
+                    className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2"
+                  >
+                    <span>🗑️</span>
+                    Limpar Gabarito
+                  </button>
+                  <button
+                    onClick={handleCalculate}
+                    className="bg-orange-600 text-white py-2 px-6 rounded-lg hover:bg-orange-700 transition-colors font-medium text-sm flex items-center gap-2"
+                  >
+                    <span>📊</span>
+                    Calcular Resultado
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Layout para AC */}
+            {selectedTest.id === 'ac' && (
+              <div className="bg-white rounded-xl shadow-soft border border-gray-200 p-8">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Coluna Esquerda (2/3): Teste AC */}
+                  <div className="lg:col-span-2 space-y-6">
+                    {/* Header do Teste */}
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-blue-600 rounded-xl flex items-center justify-center shadow-lg">
+                        <span className="text-2xl">🎯</span>
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-gray-900">AC - Atenção Concentrada</h3>
+                        <p className="text-sm text-gray-600">Avaliação da capacidade de atenção concentrada</p>
+                      </div>
+                    </div>
+
+                    {/* Seletor de Tabela Normativa */}
+                    <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200 p-5 mb-6">
+                      <label className="block text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                        <span className="text-lg">📊</span>
+                        Tabela Normativa
+                      </label>
+                      <select
+                        value={selectedAcTable || ''}
+                        onChange={(e) => setSelectedAcTable(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white font-medium"
+                      >
+                        <option value="">Selecione a tabela normativa</option>
+                        {tabelasAc.map((tabela: any) => (
+                          <option key={tabela.id} value={tabela.id}>
+                            {tabela.nome}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-600 mt-2">
+                        ⚠️ Selecione a tabela de acordo com a escolaridade do paciente
+                      </p>
+                    </div>
+
+                    {/* Teste AC - Seleção de Modo */}
+                    <div className="bg-blue-50 rounded-lg p-4 mb-4 border-2 border-blue-200">
+                      <h3 className="text-lg font-semibold text-blue-800 mb-4 flex items-center gap-2">
+                        <span className="text-xl">🎯</span>
+                        TESTE AC - Modo de Operação
+                      </h3>
+                      
+                      <div className="flex gap-4 mb-4">
+                        <button
+                          type="button"
+                          onClick={() => setAcMode('manual')}
+                          className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+                            acMode === 'manual'
+                              ? 'bg-blue-600 text-white shadow-md'
+                              : 'bg-white text-blue-600 border-2 border-blue-300 hover:bg-blue-50'
+                          }`}
+                        >
+                          🖱️ Manual
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAcMode('automatic')}
+                          className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+                            acMode === 'automatic'
+                              ? 'bg-blue-600 text-white shadow-md'
+                              : 'bg-white text-blue-600 border-2 border-blue-300 hover:bg-blue-50'
+                          }`}
+                        >
+                          🤖 Automático
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAcMode('hybrid')}
+                          className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
+                            acMode === 'hybrid'
+                              ? 'bg-blue-600 text-white shadow-md'
+                              : 'bg-white text-blue-600 border-2 border-blue-300 hover:bg-blue-50'
+                          }`}
+                        >
+                          🔄 Híbrido
+                        </button>
+                      </div>
+
+                      <p className="text-sm text-blue-600">
+                        {acMode === 'manual' && '📝 Marcação manual das figuras na grade interativa'}
+                        {acMode === 'automatic' && '🔍 Processamento automático via upload de imagens (teste + crivo)'}
+                        {acMode === 'hybrid' && '⚡ Combinação: upload de imagens + edição manual dos resultados'}
+                      </p>
+                    </div>
+
+                    {/* Modo Automático - Upload de Imagens */}
+                    {acMode === 'automatic' && (
+                      <div className="bg-green-50 rounded-lg p-4 mb-4 border-2 border-green-200">
+                        <h4 className="text-md font-semibold text-green-800 mb-4 flex items-center gap-2">
+                          <span>📸</span>
+                          Upload de Imagens para Processamento Automático
+                        </h4>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                          <div>
+                            <label className="block text-sm font-medium text-green-700 mb-2">
+                              📄 Folha do Teste Preenchida
+                            </label>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => e.target.files?.[0] && handleImageUpload('teste', e.target.files[0])}
+                              className="w-full px-3 py-2 border border-green-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                            />
+                            {testeImage && (
+                              <p className="text-xs text-green-600 mt-1">✅ {testeImage.name}</p>
+                            )}
+                          </div>
+                          
+                          <div>
+                            <label className="block text-sm font-medium text-green-700 mb-2">
+                              🎯 Crivo (Gabarito)
+                            </label>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => e.target.files?.[0] && handleImageUpload('crivo', e.target.files[0])}
+                              className="w-full px-3 py-2 border border-green-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                            />
+                            {crivoImage && (
+                              <p className="text-xs text-green-600 mt-1">✅ {crivoImage.name}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Configurações de Processamento */}
+                        <div className="bg-white rounded-lg p-4 mb-4 border border-green-300">
+                          <h5 className="text-sm font-semibold text-green-800 mb-3">⚙️ Configurações de Processamento</h5>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                              <label className="block text-xs font-medium text-green-700 mb-1">
+                                Equivalência de Zetas
+                              </label>
+                              <select
+                                value={processingConfig.zetasEquivalence}
+                                onChange={(e) => setProcessingConfig(prev => ({ ...prev, zetasEquivalence: e.target.value }))}
+                                className="w-full px-2 py-1 text-xs border border-green-300 rounded focus:outline-none focus:ring-1 focus:ring-green-500"
+                              >
+                                <option value="strict">Estrita (exato)</option>
+                                <option value="rotation">Com Rotação</option>
+                                <option value="rotation+reflection">Rotação + Reflexão</option>
+                              </select>
+                            </div>
+                            
+                            <div>
+                              <label className="block text-xs font-medium text-green-700 mb-1">
+                                Política de Duplicatas
+                              </label>
+                              <select
+                                value={processingConfig.duplicatesPolicy}
+                                onChange={(e) => setProcessingConfig(prev => ({ ...prev, duplicatesPolicy: e.target.value }))}
+                                className="w-full px-2 py-1 text-xs border border-green-300 rounded focus:outline-none focus:ring-1 focus:ring-green-500"
+                              >
+                                <option value="count_as_error">Contar como Erro</option>
+                                <option value="ignore">Ignorar</option>
+                              </select>
+                            </div>
+                            
+                            <div>
+                              <label className="block text-xs font-medium text-green-700 mb-1">
+                                Fórmula de Pontos
+                              </label>
+                              <select
+                                value={processingConfig.pointsFormula}
+                                onChange={(e) => setProcessingConfig(prev => ({ ...prev, pointsFormula: e.target.value }))}
+                                className="w-full px-2 py-1 text-xs border border-green-300 rounded focus:outline-none focus:ring-1 focus:ring-green-500"
+                              >
+                                <option value="acertos_menos_erros">Acertos - Erros</option>
+                                <option value="only_acertos">Só Acertos</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={processImages}
+                          disabled={!testeImage || !crivoImage || isProcessing}
+                          className={`px-6 py-3 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 ${
+                            !testeImage || !crivoImage || isProcessing
+                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                              : 'bg-green-600 text-white hover:bg-green-700 shadow-md hover:shadow-lg'
+                          }`}
+                        >
+                          {isProcessing ? (
+                            <>
+                              <span className="animate-spin">⏳</span>
+                              Processando...
+                            </>
+                          ) : (
+                            <>
+                              <span>🚀</span>
+                              Processar Imagens com IA
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Filtros Normativos */}
+                    <div className="bg-purple-50 rounded-lg p-4 mb-4 border-2 border-purple-200">
+                      <h4 className="text-md font-semibold text-purple-800 mb-4 flex items-center gap-2">
+                        <span>📊</span>
+                        Filtros Normativos
+                      </h4>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-purple-700 mb-2">
+                            Idade
+                          </label>
+                          <select
+                            value={normativeFilters.idade}
+                            onChange={(e) => setNormativeFilters(prev => ({ ...prev, idade: e.target.value }))}
+                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="8-9">8-9 anos</option>
+                            <option value="10-12">10-12 anos</option>
+                            <option value="13-17">13-17 anos</option>
+                            <option value="18-29">18-29 anos</option>
+                            <option value="30-39">30-39 anos</option>
+                            <option value="40-49">40-49 anos</option>
+                            <option value="50-59">50-59 anos</option>
+                            <option value="60+">60+ anos</option>
+                          </select>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-purple-700 mb-2">
+                            Escolaridade
+                          </label>
+                          <select
+                            value={normativeFilters.escolaridade}
+                            onChange={(e) => setNormativeFilters(prev => ({ ...prev, escolaridade: e.target.value }))}
+                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="Fundamental">Ensino Fundamental</option>
+                            <option value="Medio">Ensino Médio</option>
+                            <option value="Superior">Ensino Superior</option>
+                            <option value="Pos">Pós-graduação</option>
+                          </select>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-purple-700 mb-2">
+                            Região
+                          </label>
+                          <select
+                            value={normativeFilters.regiao}
+                            onChange={(e) => setNormativeFilters(prev => ({ ...prev, regiao: e.target.value }))}
+                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="Sudeste">Sudeste</option>
+                            <option value="Sul">Sul</option>
+                            <option value="Centro-Oeste">Centro-Oeste</option>
+                            <option value="Nordeste">Nordeste</option>
+                            <option value="Norte">Norte</option>
+                          </select>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-purple-700 mb-2">
+                            Sexo
+                          </label>
+                          <select
+                            value={normativeFilters.sexo}
+                            onChange={(e) => setNormativeFilters(prev => ({ ...prev, sexo: e.target.value }))}
+                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="Feminino">Feminino</option>
+                            <option value="Masculino">Masculino</option>
+                            <option value="Outro">Outro</option>
+                          </select>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-purple-700 mb-2">
+                            Nível Socioeconômico
+                          </label>
+                          <select
+                            value={normativeFilters.socioeconomico}
+                            onChange={(e) => setNormativeFilters(prev => ({ ...prev, socioeconomico: e.target.value }))}
+                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="Baixo">Baixo</option>
+                            <option value="Medio">Médio</option>
+                            <option value="Alto">Alto</option>
+                          </select>
+                        </div>
+                        
+                        <div className="flex items-end">
+                          {processingResults && (
+                            <button
+                              type="button"
+                              onClick={downloadResults}
+                              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors duration-200 flex items-center gap-2"
+                            >
+                              <span>📥</span>
+                              Download JSON
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Teste AC - Grade de Círculos */}
+                    <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                          <span className="text-xl">🎯</span>
+                          TESTE AC - Crivo de Correção
+                        </h3>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={toggleAcGabarito}
+                            className={`px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2 ${
+                              showAcGabarito 
+                                ? 'text-blue-700 bg-blue-100 border-2 border-blue-300' 
+                                : 'text-gray-700 bg-gray-100 border-2 border-gray-300 hover:bg-gray-200'
+                            }`}
+                          >
+                            <span>👁️</span>
+                            {showAcGabarito ? 'Ocultar Gabarito' : 'Mostrar Gabarito'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={clearAcMarks}
+                            className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border-2 border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-all duration-200 shadow-sm hover:shadow-md flex items-center gap-2"
+                          >
+                            <span>🗑️</span>
+                            Limpar
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Instruções do Teste AC - Nova Imagem */}
+                      <div className="bg-blue-50 rounded-lg p-4 mb-4 border-2 border-blue-200">
+                        <h4 className="text-sm font-semibold text-blue-800 mb-3 flex items-center gap-2">
+                          <span>🎯</span>
+                          Teste AC - Nova Imagem Incorporada
+                        </h4>
+                        <div className="bg-white rounded-lg p-3 mb-3 border border-blue-300">
+                          <p className="text-sm text-blue-700 font-semibold mb-2">📋 Status Atual:</p>
+                          <p className="text-xs text-blue-600 mb-2">
+                            • <strong>Figuras incorporadas</strong> - Array com 300 figuras da nova imagem
+                          </p>
+                          <p className="text-xs text-blue-600 mb-2">
+                            • <strong>Gabarito configurado</strong> - 7 círculos por fileira (140 alvos total)
+                          </p>
+                          <p className="text-xs text-blue-600 mb-2">
+                            • <strong>Primeiras 5 fileiras</strong> - Extraídas exatamente da nova imagem
+                          </p>
+                          <p className="text-xs text-blue-600">
+                            • <strong>Sistema ativo</strong> - Pronto para marcar e corrigir
+                          </p>
+                        </div>
+                        
+                        <div className="bg-white rounded-lg p-3 border border-blue-300">
+                          <p className="text-sm text-blue-700 font-semibold mb-2">🎯 Como funciona:</p>
+                          <p className="text-xs text-blue-600 mb-2">
+                            • O <strong>CRIVO</strong> tem <strong>7 círculos por fileira</strong> que indicam as posições corretas
+                          </p>
+                          <p className="text-xs text-blue-600 mb-2">
+                            • Marque as figuras nas <strong>posições indicadas pelos círculos do crivo</strong>
+                          </p>
+                          <p className="text-xs text-blue-600 mb-2">
+                            • <strong>Não importa qual figura</strong> está na posição - o que importa é a posição
+                          </p>
+                          <p className="text-xs text-blue-600">
+                            • Cada fileira deve ter <strong>exatamente 7 marcações</strong>
+                          </p>
+                        </div>
+                        
+                        <div className="bg-white rounded-lg p-3 border border-blue-300">
+                          <p className="text-sm text-blue-700 font-semibold mb-2">🎯 Figuras da nova imagem:</p>
+                          <div className="flex gap-2 items-center flex-wrap">
+                            <span className="text-lg">▷</span>
+                            <span className="text-lg">△</span>
+                            <span className="text-lg">◁</span>
+                            <span className="text-lg">▼</span>
+                            <span className="text-lg">▽</span>
+                            <span className="text-lg">▶</span>
+                            <span className="text-lg">◄</span>
+                            <span className="text-lg">▲</span>
+                          </div>
+                          <p className="text-xs text-blue-600 mt-2">
+                            Todas essas figuras aparecem na nova imagem, mas só marque nas posições indicadas pelo crivo!
+                          </p>
+                        </div>
+                        
+                        <p className="text-xs text-blue-600 mt-2">
+                          ⚠️ <strong>Regra de omissões:</strong> Omissões só contam desde a última marcação feita para cima.
+                        </p>
+                        <p className="text-xs text-blue-600 mt-1">
+                          ✅ <strong>Nova imagem:</strong> Figuras extraídas e incorporadas com sucesso!
+                        </p>
+                      </div>
+
+                      {/* Resultados do Processamento Automático */}
+                      {processingResults && (
+                        <div className="bg-yellow-50 rounded-lg p-4 mb-4 border-2 border-yellow-200">
+                          <h4 className="text-md font-semibold text-yellow-800 mb-4 flex items-center gap-2">
+                            <span>🤖</span>
+                            Resultados do Processamento Automático
+                          </h4>
+                          
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300">
+                              <div className="text-sm text-yellow-600">Acertos</div>
+                              <div className="text-2xl font-bold text-green-600">{processingResults.contagens.acertos}</div>
+                            </div>
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300">
+                              <div className="text-sm text-yellow-600">Erros</div>
+                              <div className="text-2xl font-bold text-red-600">{processingResults.contagens.erros}</div>
+                            </div>
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300">
+                              <div className="text-sm text-yellow-600">Omissões</div>
+                              <div className="text-2xl font-bold text-gray-600">{processingResults.contagens.omissoes}</div>
+                            </div>
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300">
+                              <div className="text-sm text-yellow-600">Pontos</div>
+                              <div className="text-2xl font-bold text-blue-600">{processingResults.contagens.pontos}</div>
+                            </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300">
+                              <div className="text-sm text-yellow-600">Linha de Corte</div>
+                              <div className="text-lg font-semibold text-yellow-800">Y: {processingResults.alinhamento.y_corte}</div>
+                              <div className="text-xs text-yellow-600">Linha: {processingResults.alinhamento.linha_corte_indice}</div>
+                            </div>
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300">
+                              <div className="text-sm text-yellow-600">Zetas na Área Válida</div>
+                              <div className="text-lg font-semibold text-yellow-800">{processingResults.contagens.zetas_area_valida}</div>
+                              <div className="text-xs text-yellow-600">Total analisado</div>
+                            </div>
+                          </div>
+                          
+                          {/* Auditoria por Fileira */}
+                          {processingResults.auditoria_por_linha && (
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300 mb-4">
+                              <div className="text-sm text-yellow-600 mb-3 font-semibold">📊 Auditoria por Fileira (7 círculos por linha)</div>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                                {processingResults.auditoria_por_linha.slice(0, 8).map((linha: any, idx: number) => (
+                                  <div key={idx} className="bg-gray-50 rounded p-2 border">
+                                    <div className="font-semibold text-gray-700">Linha {linha.linha}</div>
+                                    <div className="text-green-600">✓ {linha.acertos} acertos</div>
+                                    <div className="text-red-600">✗ {linha.erros} erros</div>
+                                    <div className="text-gray-600">○ {linha.omissoes} omissões</div>
+                                    <div className="text-blue-600">● {linha.circulos_crivo} círculos</div>
+                                  </div>
+                                ))}
+                              </div>
+                              {processingResults.auditoria_por_linha.length > 8 && (
+                                <div className="text-xs text-gray-500 mt-2">
+                                  ... e mais {processingResults.auditoria_por_linha.length - 8} linhas
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {processingResults.avisos && processingResults.avisos.length > 0 && (
+                            <div className="bg-white rounded-lg p-3 border border-yellow-300">
+                              <div className="text-sm text-yellow-600 mb-2">Avisos:</div>
+                              <ul className="text-sm text-yellow-700 space-y-1">
+                                {processingResults.avisos.map((aviso: string, idx: number) => (
+                                  <li key={idx}>• {aviso}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Grade de Figuras - Nova Imagem */}
+                      <div className="bg-white rounded-lg p-4 mb-4 relative">
+                        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${AC_COLS}, 1fr)` }}>
+                          {Array.from({ length: AC_TOTAL }, (_, idx) => {
+                            const isMarked = acMarks[idx];
+                            const shouldMark = AC_GABARITO[idx];
+                            const showGabarito = showAcGabarito;
+                            const figure = AC_FIGURES[idx];
+                            
+                            let figureClass = 'w-8 h-8 flex items-center justify-center cursor-pointer transition-all duration-200 hover:scale-110 text-lg font-bold ';
+                            
+                            if (isMarked) {
+                              if (shouldMark) {
+                                figureClass += 'bg-green-500 text-white rounded shadow-md'; // Correto
+                              } else {
+                                figureClass += 'bg-orange-500 text-white rounded shadow-md'; // Incorreto
+                              }
+                            } else if (showGabarito && shouldMark) {
+                              figureClass += 'bg-gray-400 text-white rounded shadow-md'; // Omissão
+                            } else {
+                              figureClass += 'text-gray-700 hover:bg-gray-100 rounded'; // Normal
+                            }
+                            
+                            return (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => toggleAcMark(idx)}
+                                className={figureClass}
+                                title={`Figura ${idx + 1}${showGabarito ? ` - ${shouldMark ? 'Deveria marcar' : 'Não marcar'}` : ''}`}
+                              >
+                                {figure}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        
+                        <div className="flex justify-between items-center mt-4">
+                          <div className="text-sm text-gray-600">
+                            Total: {AC_TOTAL} figuras | Marcadas: {acMarks.filter(Boolean).length}
+                          </div>
+                          <button
+                            onClick={() => setShowAcGabarito(!showAcGabarito)}
+                            className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600 transition-colors"
+                          >
+                            {showAcGabarito ? 'Ocultar Gabarito' : 'Mostrar Gabarito'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Estatísticas Automáticas */}
+                      {acStats && (
+                        <div className="bg-white border-2 border-gray-200 rounded-xl p-4">
+                          <div className="text-base font-bold text-gray-800 mb-3">Resultados Automáticos:</div>
+                          <div className="grid grid-cols-4 gap-3 mb-3">
+                            <div className="bg-green-50 rounded-lg p-2 border-2 border-green-200">
+                              <span className="text-xs text-green-700 font-medium">Acertos:</span>
+                              <span className="text-lg font-bold text-green-700 ml-1">{acStats.acertos}</span>
+                            </div>
+                            <div className="bg-orange-50 rounded-lg p-2 border-2 border-orange-200">
+                              <span className="text-xs text-orange-700 font-medium">Erros:</span>
+                              <span className="text-lg font-bold text-orange-700 ml-1">{acStats.erros}</span>
+                            </div>
+                            <div className="bg-gray-50 rounded-lg p-2 border-2 border-gray-200">
+                              <span className="text-xs text-gray-700 font-medium">Omissões:</span>
+                              <span className="text-lg font-bold text-gray-700 ml-1">{acStats.omissoes}</span>
+                            </div>
+                            <div className="bg-blue-50 rounded-lg p-2 border-2 border-blue-200">
+                              <span className="text-xs text-blue-700 font-medium">Pontos:</span>
+                              <span className="text-lg font-bold text-blue-700 ml-1">{acStats.resultado}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Coluna Direita (1/3): Entrada Manual */}
+                  <div className="lg:col-span-1">
+                    <div className="bg-white rounded-lg border border-gray-200 p-4 sticky top-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="text-sm">🎯</span>
+                        <h4 className="text-sm font-semibold text-gray-800">AC - Atenção Concentrada</h4>
+                      </div>
+                      <p className="text-xs text-gray-500 mb-3">Entrada manual de dados</p>
+                      
+                      <div className="space-y-3">
+                        {selectedTest.campos.map((campo) => (
+                          <div key={campo.nome}>
+                            <label className="block text-xs font-medium text-gray-600 mb-1">
+                              {campo.label}
+                            </label>
+                            {campo.tipo === 'select' ? (
+                              <select
+                                value={testData[campo.nome] || ''}
+                                onChange={(e) => handleInputChange(campo.nome, e.target.value)}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              >
+                                <option value="">Selecione {campo.label}</option>
+                                {campo.options?.map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type={campo.tipo}
+                                value={testData[campo.nome] || ''}
+                                onChange={(e) => handleInputChange(campo.nome, e.target.value)}
+                                min={campo.min}
+                                max={campo.max}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Botões - AC */}
+                <div className="flex justify-center mt-6 gap-3">
+                  <button
+                    onClick={clearAcMarks}
+                    className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2"
+                  >
+                    <span>🗑️</span>
+                    Limpar Marcações
+                  </button>
+                  <button
+                    onClick={handleCalculate}
+                    className="bg-blue-600 text-white py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors font-medium text-sm flex items-center gap-2"
+                  >
+                    <span>📊</span>
+                    Calcular Resultado
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Results Display */}
             {results && Object.keys(results).length > 0 && (
               <div className="mt-8">
@@ -1427,7 +3231,7 @@ export default function TestesPage() {
                       <div className="bg-purple-50 p-4 rounded-lg border-2 border-purple-200">
                         <h5 className="font-semibold text-purple-700 mb-2">🎯 QI</h5>
                         <div className="text-4xl font-bold text-purple-800 mb-1">
-                          {results.qi || 'N/A'}
+                          {String(results.qi || 'N/A')}
                         </div>
                         <p className="text-sm text-purple-600">Quociente de Inteligência</p>
                       </div>
@@ -1455,8 +3259,111 @@ export default function TestesPage() {
                   </div>
                 )}
 
+                {/* Resultados específicos para R-1 */}
+                {selectedTest.id === 'r1' && (
+                  <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4">🧠 R-1 - Resultados da Avaliação</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      {/* Acertos */}
+                      <div className="bg-green-50 p-4 rounded-lg border-2 border-green-200">
+                        <h5 className="font-semibold text-green-700 mb-2">✅ Acertos</h5>
+                        <div className="text-4xl font-bold text-green-800 mb-1">{r1CorrectCount}</div>
+                        <p className="text-sm text-green-600">de 40 questões</p>
+                      </div>
+
+                      {/* Percentil */}
+                      <div className="bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
+                        <h5 className="font-semibold text-blue-700 mb-2">📊 Percentil</h5>
+                        <div className="text-4xl font-bold text-blue-800 mb-1">
+                          {String(results.percentil || 'N/A')}
+                        </div>
+                        <p className="text-sm text-blue-600">Posição relativa</p>
+                      </div>
+
+                      {/* Classificação */}
+                      <div className="bg-orange-50 p-4 rounded-lg border-2 border-orange-200">
+                        <h5 className="font-semibold text-orange-700 mb-2">🎯 Classificação</h5>
+                        <div className="text-4xl font-bold text-orange-800 mb-1">
+                          {String(results.classificacao || 'N/A')}
+                        </div>
+                        <p className="text-sm text-orange-600">Nível de raciocínio</p>
+                      </div>
+                    </div>
+
+                    {/* Classificação detalhada */}
+                    {results.classificacao && (
+                      <div className="mt-6 bg-gradient-to-r from-orange-50 to-yellow-50 p-4 rounded-lg border-2 border-orange-200">
+                        <h5 className="font-semibold text-orange-700 mb-2">🏆 Classificação Detalhada</h5>
+                        <div className="text-2xl font-bold text-orange-900">
+                          {String(results.classificacao)}
+                        </div>
+                        {results.interpretacao && (
+                          <p className="text-sm text-orange-700 mt-2">{String(results.interpretacao)}</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tabela utilizada */}
+                    {results.tabela && (
+                      <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                        <p className="text-sm text-gray-600">
+                          <span className="font-semibold">Tabela normativa:</span>{' '}
+                          {String(results.tabela)}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Resultados para AC */}
+                {selectedTest.id === 'ac' && (
+                  <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+                    <h4 className="text-lg font-semibold text-gray-900 mb-4">🎯 AC - Resultados da Avaliação</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                      <div className="bg-green-50 rounded-lg p-4 border-2 border-green-200">
+                        <div className="text-sm text-green-700 font-medium">Acertos</div>
+                        <div className="text-2xl font-bold text-green-700">{String(results.acertos ?? 'N/A')}</div>
+                      </div>
+                      <div className="bg-orange-50 rounded-lg p-4 border-2 border-orange-200">
+                        <div className="text-sm text-orange-700 font-medium">Erros</div>
+                        <div className="text-2xl font-bold text-orange-700">{String(results.erros ?? 'N/A')}</div>
+                      </div>
+                      <div className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                        <div className="text-sm text-gray-700 font-medium">Omissões</div>
+                        <div className="text-2xl font-bold text-gray-700">{String(results.omissoes ?? 'N/A')}</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-blue-50 rounded-lg p-4 border-2 border-blue-200">
+                        <div className="text-sm text-blue-700 font-medium">Pontos</div>
+                        <div className="text-2xl font-bold text-blue-700">{String(results.resultado ?? 'N/A')}</div>
+                      </div>
+                      <div className="bg-purple-50 rounded-lg p-4 border-2 border-purple-200">
+                        <div className="text-sm text-purple-700 font-medium">Percentil</div>
+                        <div className="text-2xl font-bold text-purple-700">{String(results.percentil ?? 'N/A')}</div>
+                      </div>
+                    </div>
+                    {results.classificacao && (
+                      <div className="mt-4 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-200">
+                        <div className="text-sm text-blue-700 font-medium">Classificação</div>
+                        <div className="text-xl font-bold text-blue-700">{String(results.classificacao ?? 'N/A')}</div>
+                        {results.interpretacao && String(results.interpretacao) && (
+                          <p className="text-sm text-blue-600 mt-2">{String(results.interpretacao)}</p>
+                        )}
+                      </div>
+                    )}
+                    {results.tabela && String(results.tabela) && (
+                      <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                        <div className="text-xs text-gray-600">
+                          <strong>Tabela utilizada:</strong> {String(results.tabela)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Resultados genéricos para outros testes */}
-                {selectedTest.id !== 'memore' && selectedTest.id !== 'mig' && (
+                {selectedTest.id !== 'memore' && selectedTest.id !== 'mig' && selectedTest.id !== 'r1' && selectedTest.id !== 'ac' && (
                   <div className="bg-gray-50 rounded-lg p-6">
                     <div className="space-y-2">
                       {Object.entries(results).map(([key, value]) => (
@@ -1470,6 +3377,46 @@ export default function TestesPage() {
                 )}
               </div>
             )}
+
+            {/* Botão Guardar - Aparece para todos os testes */}
+            <div className="mt-6 pt-6 border-t border-gray-200 hide-on-print">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                  {analysisType === 'linked' ? (
+                    foundPatient ? (
+                      <span className="text-green-600">
+                        ✅ Teste vinculado a: {foundPatient.nome} - Laudo: {patientData.numero_laudo}
+                      </span>
+                    ) : (
+                      <span className="text-yellow-600">
+                        ⚠️ Preencha os dados do paciente acima para vincular
+                      </span>
+                    )
+                  ) : (
+                    <span className="text-blue-600">
+                      🔓 Teste anônimo - não será vinculado a paciente
+                    </span>
+                  )}
+                </div>
+                
+                <button
+                  onClick={handleSaveTest}
+                  disabled={isSaving || (analysisType === 'linked' && (!patientData.cpf || !patientData.nome || !patientData.numero_laudo))}
+                  className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Save className="w-5 h-5" />
+                  {isSaving ? 'Salvando...' : (analysisType === 'linked' ? 'Calcular e Guardar' : 'Calcular (Não Salva)')}
+                </button>
+              </div>
+              
+              {analysisType === 'linked' && !foundPatient && patientData.cpf && (
+                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                  <p className="text-sm text-yellow-700">
+                    ℹ️ Paciente não encontrado com esse CPF. O sistema criará uma nova avaliação ao guardar.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -7,6 +7,113 @@ const router = express.Router();
 // Aplicar autenticação em todas as rotas
 router.use(authenticateToken);
 
+// Mapeamento de consumo de folhas por teste
+const CONSUMO_ESTOQUE = {
+  'memore': { quantidade: 1, descricao: '1 folha de Memore' },
+  'mig': { quantidade: 1, descricao: '1 folha de MIG' },
+  'r1': { quantidade: 1, descricao: '1 folha de R-1' },
+  'ac': { quantidade: 1, descricao: '1 folha de AC' },
+  'beta-iii': { quantidade: 1, descricao: '1 folha de BETA-III' },
+  'bpa2': { quantidade: 1, descricao: '1 folha de BPA-2' },
+  'mvt': { quantidade: 1, descricao: '1 folha de MVT' },
+  'palografico': { quantidade: 1, descricao: '1 folha de Palográfico' },
+  'rotas': { quantidade: 3, descricao: '3 folhas (Concentrada + Alternada + Dividida)' }
+};
+
+// Função para descontar estoque de um teste
+async function descontarEstoqueTeste(tipoTeste, avaliacaoId, usuarioId) {
+  try {
+    console.log(`🔍 Iniciando desconto de estoque: tipo=${tipoTeste}, avaliacao=${avaliacaoId}, usuario=${usuarioId}`);
+    
+    const consumo = CONSUMO_ESTOQUE[tipoTeste];
+    if (!consumo) {
+      console.log(`⚠️ Tipo de teste '${tipoTeste}' não encontrado no mapeamento de estoque`);
+      return { success: false, message: 'Teste não mapeado' };
+    }
+    
+    console.log(`📋 Consumo mapeado: ${consumo.quantidade} folha(s) - ${consumo.descricao}`);
+
+    // Buscar o ID do item de estoque pelo nome do teste
+    const nomeTesteMap = {
+      'memore': 'Memore - Memória',
+      'mig': 'MIG - Avaliação Psicológica',
+      'r1': 'R-1 - Raciocínio',
+      'ac': 'AC - Atenção Concentrada',
+      'beta-iii': 'BETA-III - Raciocínio Matricial',
+      'bpa2': 'BPA-2 - Atenção',
+      'mvt': 'MVT - Memória Visual',
+      'palografico': 'Palográfico',
+      'rotas': 'Rotas de Atenção'
+    };
+
+    const nomeTeste = nomeTesteMap[tipoTeste];
+    if (!nomeTeste) {
+      console.log(`⚠️ Nome de teste não encontrado para '${tipoTeste}'`);
+      return { success: false, message: 'Nome de teste não encontrado' };
+    }
+    
+    console.log(`🔍 Buscando no estoque: "${nomeTeste}"`);
+
+    // Buscar item do estoque
+    const estoqueResult = await query(
+      'SELECT id, quantidade_atual FROM testes_estoque WHERE nome_teste = $1 AND ativo = true',
+      [nomeTeste]
+    );
+
+    if (estoqueResult.rows.length === 0) {
+      console.log(`⚠️ Item de estoque '${nomeTeste}' não encontrado`);
+      return { success: false, message: 'Item de estoque não encontrado' };
+    }
+
+    const estoqueItem = estoqueResult.rows[0];
+    console.log(`📊 Estoque encontrado: ID=${estoqueItem.id}, Quantidade Atual=${estoqueItem.quantidade_atual}`);
+    
+    const novaQuantidade = estoqueItem.quantidade_atual - consumo.quantidade;
+    console.log(`🧮 Cálculo: ${estoqueItem.quantidade_atual} - ${consumo.quantidade} = ${novaQuantidade}`);
+
+    if (novaQuantidade < 0) {
+      console.log(`❌ Estoque insuficiente para ${nomeTeste}: atual=${estoqueItem.quantidade_atual}, necessário=${consumo.quantidade}`);
+      return { 
+        success: false, 
+        message: `Estoque insuficiente de ${nomeTeste}. Disponível: ${estoqueItem.quantidade_atual}, Necessário: ${consumo.quantidade}` 
+      };
+    }
+
+    // Atualizar estoque
+    console.log(`💾 Atualizando estoque: ID=${estoqueItem.id}, Nova Quantidade=${novaQuantidade}`);
+    await query(
+      'UPDATE testes_estoque SET quantidade_atual = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [novaQuantidade, estoqueItem.id]
+    );
+
+    // Registrar movimentação vinculada à avaliação
+    console.log(`📝 Registrando movimentação: teste_id=${estoqueItem.id}, avaliacao_id=${avaliacaoId}, quantidade=${consumo.quantidade}`);
+    await query(`
+      INSERT INTO movimentacoes_estoque (teste_id, tipo_movimentacao, quantidade, observacoes, usuario_id, avaliacao_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [
+      estoqueItem.id,
+      'saida',
+      consumo.quantidade,
+      `Aplicação de teste ${nomeTeste} - Avaliação #${avaliacaoId}`,
+      usuarioId,
+      avaliacaoId
+    ]);
+
+    console.log(`✅ Estoque descontado: ${nomeTeste} - ${consumo.quantidade} folha(s). Novo saldo: ${novaQuantidade}`);
+    
+    return { 
+      success: true, 
+      message: `Estoque atualizado: ${nomeTeste}`,
+      quantidade_descontada: consumo.quantidade,
+      novo_saldo: novaQuantidade
+    };
+  } catch (error) {
+    console.error('❌ Erro ao descontar estoque:', error);
+    return { success: false, message: error.message };
+  }
+}
+
 
 // Listar todas as tabelas normativas
 router.get('/', async (req, res) => {
@@ -250,7 +357,11 @@ router.post('/:tipo/calculate', async (req, res) => {
         
         // Salvar resultado específico do teste
         console.log('📊 Resultado a ser salvo:', resultado);
-        await salvarResultadoTeste(tipo, avaliacao.id, dados, resultado);
+        const descontarEstoque = dados.descontarEstoque !== false; // Por padrão true
+        console.log('📦 Flag descontarEstoque recebida do frontend:', dados.descontarEstoque);
+        console.log('📦 Flag descontarEstoque processada:', descontarEstoque);
+        console.log('📦 Usuario ID:', req.user.id);
+        await salvarResultadoTeste(tipo, avaliacao.id, dados, resultado, descontarEstoque, req.user.id);
         
         resultado.avaliacao_id = avaliacao.id;
         resultado.salvo = true;
@@ -279,20 +390,25 @@ async function criarOuBuscarAvaliacao(paciente, usuarioId, dataAvaliacao, numero
   // Usar a data fornecida ou a data atual como fallback
   const data = dataAvaliacao || new Date().toISOString().split('T')[0];
   
-  // Verificar se já existe uma avaliação para este paciente na data especificada
+  // Verificar se já existe uma avaliação para este paciente + laudo + data
+  // Um laudo pode ter múltiplas avaliações em datas diferentes
   const avaliacaoExistente = await query(`
     SELECT id FROM avaliacoes 
-    WHERE paciente_id = $1 AND DATE(data_aplicacao) = $2
+    WHERE paciente_id = $1 AND numero_laudo = $2 AND DATE(data_aplicacao) = $3
     ORDER BY created_at DESC 
     LIMIT 1
-  `, [paciente.id, data]);
+  `, [paciente.id, numeroLaudo, data]);
   
   if (avaliacaoExistente.rows.length > 0) {
+    console.log('📋 Avaliação existente encontrada:', avaliacaoExistente.rows[0]);
     return avaliacaoExistente.rows[0];
   }
   
   // Criar nova avaliação
-  const laudo = numeroLaudo || `LAU-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+  // Agora o mesmo laudo pode ter múltiplas avaliações (sem constraint UNIQUE)
+  const laudo = numeroLaudo || `LAU-${new Date().getFullYear()}-${String(paciente.id).padStart(4, '0')}-${String(Date.now()).slice(-4)}`;
+  
+  console.log('📝 Criando nova avaliação:', { paciente_id: paciente.id, numero_laudo: laudo, data });
   
   const novaAvaliacao = await query(`
     INSERT INTO avaliacoes (paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao)
@@ -300,11 +416,32 @@ async function criarOuBuscarAvaliacao(paciente, usuarioId, dataAvaliacao, numero
     RETURNING id
   `, [paciente.id, usuarioId, laudo, data]);
   
+  console.log('✅ Nova avaliação criada:', novaAvaliacao.rows[0]);
   return novaAvaliacao.rows[0];
 }
 
-async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado) {
+async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descontarEstoque = true, usuarioId = null) {
   switch (tipo) {
+    case 'mig':
+      console.log('💾 Salvando MIG:', {
+        avaliacaoId,
+        tipo_avaliacao: 'geral',
+        acertos: dados.acertos,
+        percentil: resultado.percentil,
+        classificacao: resultado.classificacao
+      });
+      
+      await query(`
+        INSERT INTO resultados_mig (avaliacao_id, tipo_avaliacao, acertos, percentil, classificacao)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        avaliacaoId,
+        'geral', // tipo_avaliacao obrigatório
+        dados.acertos,
+        resultado.percentil,
+        resultado.classificacao
+      ]);
+      break;
     case 'memore':
       await query(`
         INSERT INTO resultados_memore (avaliacao_id, vp, vn, fn, fp, resultado_final, percentil, classificacao)
@@ -321,6 +458,16 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado) {
       ]);
       break;
     case 'ac':
+      console.log('💾 Salvando AC:', {
+        avaliacaoId,
+        acertos: dados.acertos,
+        erros: dados.erros,
+        omissoes: dados.omissoes,
+        pb: resultado.pb,
+        percentil: resultado.percentil,
+        classificacao: resultado.classificacao
+      });
+      
       await query(`
         INSERT INTO resultados_ac (avaliacao_id, acertos, erros, omissoes, pb, percentil, classificacao)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -458,7 +605,60 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado) {
         ]);
       }
       break;
+    case 'r1':
+      console.log('💾 Salvando R-1:', {
+        avaliacaoId,
+        acertos: dados.acertos,
+        percentil: resultado.percentil,
+        classificacao: resultado.classificacao
+      });
+      
+      await query(`
+        INSERT INTO resultados_r1 (avaliacao_id, acertos, percentil, classificacao)
+        VALUES ($1, $2, $3, $4)
+      `, [
+        avaliacaoId,
+        dados.acertos,
+        resultado.percentil,
+        resultado.classificacao
+      ]);
+      break;
+    case 'mvt':
+      console.log('💾 Salvando MVT:', {
+        avaliacaoId,
+        acertos: dados.acertos,
+        erros: dados.erros,
+        tempo: dados.tempo,
+        percentil: resultado.percentil,
+        classificacao: resultado.classificacao
+      });
+      
+      await query(`
+        INSERT INTO resultados_mvt (avaliacao_id, acertos, erros, tempo, percentil, classificacao)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, [
+        avaliacaoId,
+        dados.acertos,
+        dados.erros || 0,
+        dados.tempo || 0,
+        resultado.percentil,
+        resultado.classificacao
+      ]);
+      break;
     // Adicionar outros testes conforme necessário
+  }
+
+  // Descontar estoque se habilitado
+  if (descontarEstoque && usuarioId) {
+    console.log(`📦 Descontando estoque para teste ${tipo}...`);
+    const resultadoEstoque = await descontarEstoqueTeste(tipo, avaliacaoId, usuarioId);
+    if (resultadoEstoque.success) {
+      console.log(`✅ ${resultadoEstoque.message} - Descontado: ${resultadoEstoque.quantidade_descontada} folha(s)`);
+    } else {
+      console.log(`⚠️ Não foi possível descontar estoque: ${resultadoEstoque.message}`);
+    }
+  } else if (!descontarEstoque) {
+    console.log(`ℹ️ Desconto de estoque desabilitado pelo usuário para teste ${tipo}`);
   }
 }
 

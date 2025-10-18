@@ -2,8 +2,9 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Edit, Trash2, FileText, User, Mail } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, FileText, User, Mail, Eye, Send, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useRouter } from 'next/navigation';
 import { pacientesService, avaliacoesService } from '@/services/api';
 import PhoneInputWithValidation from '@/components/PhoneInputWithValidation';
 import EmailInputWithValidation from '@/components/EmailInputWithValidation';
@@ -36,6 +37,7 @@ interface Avaliacao {
   aplicacao: string;
   tipo_habilitacao: string;
   observacoes?: string;
+  aptidao?: string;
   created_at: string;
   paciente_nome: string;
   paciente_cpf: string;
@@ -71,10 +73,14 @@ const PacientesPage: React.FC = () => {
     aplicacao: 'Individual',
     tipo_habilitacao: '1ª Habilitação',
     observacoes: '',
+    aptidao: '',
     testes_selecionados: [] as string[]
   });
+  const [showDeleteAvaliacaoConfirm, setShowDeleteAvaliacaoConfirm] = useState(false);
+  const [avaliacaoToDelete, setAvaliacaoToDelete] = useState<Avaliacao | null>(null);
 
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   // Buscar pacientes
   const { data, isLoading, error } = useQuery({
@@ -141,14 +147,38 @@ const PacientesPage: React.FC = () => {
 
   const createAvaliacaoMutation = useMutation({
     mutationFn: avaliacoesService.create,
-    onSuccess: () => {
+    onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
       toast.success('Avaliação criada com sucesso!');
-      setShowNewAvaliacao(false);
-      resetAvaliacaoForm();
+      
+      // Redirecionar para página de testes com dados vinculados E testes pré-selecionados
+      const avaliacaoId = (response as any).data?.avaliacao?.id;
+      if (avaliacaoId && selectedPatient) {
+        const testesParam = avaliacaoData.testes_selecionados.length > 0 
+          ? `&testes=${avaliacaoData.testes_selecionados.join(',')}` 
+          : '';
+        router.push(`/testes?avaliacao_id=${avaliacaoId}&paciente_id=${selectedPatient.id}&numero_laudo=${avaliacaoData.numero_laudo}${testesParam}`);
+      } else {
+        setShowNewAvaliacao(false);
+        resetAvaliacaoForm();
+      }
     },
     onError: (error: any) => {
       toast.error(error.response?.data?.error || 'Erro ao criar avaliação');
+    },
+  });
+
+  const deleteAvaliacaoMutation = useMutation({
+    mutationFn: avaliacoesService.delete,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
+      queryClient.invalidateQueries({ queryKey: ['pacientes'] });
+      toast.success('Avaliação excluída com sucesso!');
+      setShowDeleteAvaliacaoConfirm(false);
+      setAvaliacaoToDelete(null);
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.error || 'Erro ao excluir avaliação');
     },
   });
 
@@ -163,6 +193,44 @@ const PacientesPage: React.FC = () => {
     }
     
     return age;
+  };
+
+  const abreviarEscolaridade = (escolaridade: string): string => {
+    if (!escolaridade) return '-';
+    const map: Record<string, string> = {
+      'E. Fundamental': 'F',
+      'E. Médio': 'M',
+      'E. Superior': 'S',
+      'Pós-Graduação': 'PG',
+      'Não Escolarizado': 'NE'
+    };
+    return map[escolaridade] || escolaridade.substring(0, 2);
+  };
+
+  // Função para formatar CPF
+  const formatCPF = (value: string): string => {
+    // Remove tudo que não é número
+    const numbers = value.replace(/\D/g, '');
+    
+    // Limita a 11 dígitos
+    const limited = numbers.slice(0, 11);
+    
+    // Aplica a formatação: 000.000.000-00
+    if (limited.length <= 3) {
+      return limited;
+    } else if (limited.length <= 6) {
+      return `${limited.slice(0, 3)}.${limited.slice(3)}`;
+    } else if (limited.length <= 9) {
+      return `${limited.slice(0, 3)}.${limited.slice(3, 6)}.${limited.slice(6)}`;
+    } else {
+      return `${limited.slice(0, 3)}.${limited.slice(3, 6)}.${limited.slice(6, 9)}-${limited.slice(9)}`;
+    }
+  };
+
+  // Handler para CPF
+  const handleCPFChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatCPF(e.target.value);
+    setFormData(prev => ({ ...prev, cpf: formatted }));
   };
 
 
@@ -264,6 +332,17 @@ const PacientesPage: React.FC = () => {
     setShowNewAvaliacao(true);
   };
 
+  const handleDeleteAvaliacao = (avaliacao: Avaliacao) => {
+    setAvaliacaoToDelete(avaliacao);
+    setShowDeleteAvaliacaoConfirm(true);
+  };
+
+  const confirmDeleteAvaliacao = () => {
+    if (avaliacaoToDelete) {
+      deleteAvaliacaoMutation.mutate(avaliacaoToDelete.id);
+    }
+  };
+
   const handleAvaliacaoSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -272,8 +351,12 @@ const PacientesPage: React.FC = () => {
       return;
     }
     
+    // Remover o campo testes_selecionados do objeto enviado ao backend
+    // O backend não espera esse campo no schema de validação
+    const { testes_selecionados, ...avaliacaoDataWithoutTests } = avaliacaoData;
+    
     const dataToSubmit = {
-      ...avaliacaoData,
+      ...avaliacaoDataWithoutTests,
       paciente_id: parseInt(selectedPatient.id),
       observacoes: avaliacaoData.observacoes || undefined
     };
@@ -341,28 +424,28 @@ const PacientesPage: React.FC = () => {
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                   Paciente
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                   CPF
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase">
                   Idade
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                   Contexto
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Escolaridade
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                  Esc
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Telefone
+                <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  Contato
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  E-mail
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
+                  Resultado
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-2 py-3 text-center text-xs font-medium text-gray-500 uppercase">
                   Ações
                 </th>
               </tr>
@@ -374,73 +457,101 @@ const PacientesPage: React.FC = () => {
                   className="hover:bg-gray-50 cursor-pointer"
                   onClick={() => handlePatientClick(paciente)}
                 >
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0 h-10 w-10">
-                        <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center">
-                          <User className="h-5 w-5 text-blue-600" />
-                        </div>
-                      </div>
-                      <div className="ml-4">
-                        <div className="text-sm font-medium text-gray-900">{paciente.nome}</div>
-                        <div className="text-sm text-gray-500">ID: {paciente.id}</div>
-                      </div>
+                  <td className="px-4 py-3">
+                    <div className="text-sm font-medium text-gray-900 max-w-[180px] truncate" title={paciente.nome}>
+                      {paciente.nome}
                     </div>
+                    <div className="text-xs text-gray-500">ID: {paciente.id}</div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  <td className="px-3 py-3 text-sm text-gray-900">
                     {paciente.cpf}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  <td className="px-3 py-3 text-sm text-gray-900 text-center font-medium">
                     {paciente.data_nascimento ? calculateAge(paciente.data_nascimento) : '-'}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
+                  <td className="px-3 py-3">
                     <div className="text-sm text-gray-900">{paciente.contexto || '-'}</div>
                     {paciente.tipo_transito && (
-                      <div className="text-xs text-gray-500">{paciente.tipo_transito}</div>
+                      <div className="text-xs text-gray-500 truncate max-w-[120px]" title={paciente.tipo_transito}>
+                        {paciente.tipo_transito.substring(0, 18)}{paciente.tipo_transito.length > 18 ? '...' : ''}
+                      </div>
                     )}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {paciente.escolaridade || '-'}
+                  <td className="px-2 py-3 text-center">
+                    <span 
+                      className="inline-block px-2 py-1 bg-gray-100 text-gray-800 rounded font-semibold text-xs"
+                      title={paciente.escolaridade || 'Não informado'}
+                    >
+                      {abreviarEscolaridade(paciente.escolaridade)}
+                    </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {paciente.telefone ? (
+                  <td className="px-3 py-3">
+                    {paciente.telefone && (
                       <a
                         href={generateWhatsAppLink(paciente.telefone)}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-green-600 hover:text-green-800 hover:underline"
-                        title="Enviar WhatsApp"
+                        className="text-green-600 hover:text-green-800 text-sm block"
+                        title="WhatsApp"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {formatPhoneDisplay(paciente.telefone)}
                       </a>
-                    ) : (
-                      '-'
                     )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {paciente.email ? (
+                    {paciente.email && (
                       <a
                         href={`mailto:${paciente.email}`}
-                        className="text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1"
-                        title="Enviar email"
+                        className="text-blue-600 hover:text-blue-800 text-xs block truncate max-w-[140px]"
+                        title={paciente.email}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <Mail className="h-4 w-4" />
                         {paciente.email}
                       </a>
+                    )}
+                    {!paciente.telefone && !paciente.email && '-'}
+                  </td>
+                  <td className="px-2 py-3 text-center">
+                    {(paciente as any).ultima_aptidao ? (
+                      <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold whitespace-nowrap ${
+                        (paciente as any).ultima_aptidao === 'Apto' 
+                          ? 'bg-green-100 text-green-800'
+                          : (paciente as any).ultima_aptidao === 'Inapto Temporário'
+                          ? 'bg-yellow-100 text-yellow-800'
+                          : 'bg-red-100 text-red-800'
+                      }`}>
+                        {(paciente as any).ultima_aptidao === 'Apto' && <CheckCircle className="h-3.5 w-3.5" />}
+                        {(paciente as any).ultima_aptidao === 'Inapto Temporário' && <AlertCircle className="h-3.5 w-3.5" />}
+                        {(paciente as any).ultima_aptidao === 'Inapto' && <XCircle className="h-3.5 w-3.5" />}
+                        {(paciente as any).ultima_aptidao === 'Apto' ? 'Apto' : (paciente as any).ultima_aptidao === 'Inapto Temporário' ? 'Inap.T' : 'Inap.'}
+                      </span>
                     ) : (
-                      '-'
+                      <span className="text-gray-400 text-xs">-</span>
                     )}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    <div className="flex space-x-2">
+                  <td className="px-2 py-3 text-center">
+                    <div className="flex justify-center items-center gap-1.5">
+                      {(paciente as any).ultima_aptidao && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toast('📧 Funcionalidade de envio será implementada em breve', {
+                              icon: '🚀',
+                              duration: 3000
+                            });
+                          }}
+                          className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition-all"
+                          title="Enviar Resultado"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           handleEdit(paciente);
                         }}
-                        className="text-blue-600 hover:text-blue-900"
+                        className="p-1.5 text-blue-600 hover:text-blue-900 hover:bg-blue-50 rounded"
+                        title="Editar"
                       >
                         <Edit className="h-4 w-4" />
                       </button>
@@ -449,7 +560,8 @@ const PacientesPage: React.FC = () => {
                           e.stopPropagation();
                           handleDelete(paciente.id);
                         }}
-                        className="text-red-600 hover:text-red-900"
+                        className="p-1.5 text-red-600 hover:text-red-900 hover:bg-red-50 rounded"
+                        title="Deletar"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -592,20 +704,54 @@ const PacientesPage: React.FC = () => {
                 {avaliacoes.length > 0 ? (
                   <div className="space-y-2">
                     {avaliacoes.map((avaliacao: Avaliacao) => (
-                      <div key={avaliacao.id} className="border border-gray-200 rounded-lg p-4">
-                        <div className="flex justify-between items-start">
-                          <div>
+                      <div key={avaliacao.id} className="border border-gray-200 rounded-lg p-4 hover:border-blue-300 transition-colors">
+                        <div className="flex justify-between items-start gap-4">
+                          <div className="flex-1">
                             <h5 className="font-medium text-gray-900">{avaliacao.numero_laudo}</h5>
                             <p className="text-sm text-gray-600">
                               {new Date(avaliacao.data_aplicacao).toLocaleDateString('pt-BR')} - {avaliacao.aplicacao}
                             </p>
                             <p className="text-sm text-gray-600">{avaliacao.tipo_habilitacao}</p>
+                            {avaliacao.aptidao && (
+                              <p className={`text-sm font-medium mt-1 ${
+                                avaliacao.aptidao === 'Apto' ? 'text-green-600' :
+                                avaliacao.aptidao === 'Inapto Temporário' ? 'text-yellow-600' :
+                                'text-red-600'
+                              }`}>
+                                {avaliacao.aptidao === 'Apto' && '✅ '}
+                                {avaliacao.aptidao === 'Inapto Temporário' && '⚠️ '}
+                                {avaliacao.aptidao === 'Inapto' && '❌ '}
+                                {avaliacao.aptidao}
+                              </p>
+                            )}
                             {avaliacao.observacoes && (
                               <p className="text-sm text-gray-500 mt-1">{avaliacao.observacoes}</p>
                             )}
                           </div>
-                          <div className="text-xs text-gray-400">
-                            {new Date(avaliacao.created_at).toLocaleDateString('pt-BR')}
+                          <div className="flex flex-col items-end gap-2">
+                            <div className="text-xs text-gray-400">
+                              {new Date(avaliacao.created_at).toLocaleDateString('pt-BR')}
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => router.push(`/avaliacoes/${avaliacao.id}`)}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+                                title="Ver resultados"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                Ver Resultados
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteAvaliacao(avaliacao);
+                                }}
+                                className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm"
+                                title="Excluir avaliação"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -720,6 +866,23 @@ const PacientesPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Aptidão (para contexto de Trânsito) */}
+                {selectedPatient?.contexto === 'Trânsito' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Observação de Aptidão</label>
+                    <select
+                      value={avaliacaoData.aptidao}
+                      onChange={(e) => setAvaliacaoData(prev => ({ ...prev, aptidao: e.target.value }))}
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">Sem observação</option>
+                      <option value="Apto">Apto</option>
+                      <option value="Inapto Temporário">Inapto Temporário</option>
+                      <option value="Inapto">Inapto</option>
+                    </select>
+                  </div>
+                )}
+
                 {/* Seleção de Testes */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">Testes a Aplicar</label>
@@ -811,7 +974,8 @@ const PacientesPage: React.FC = () => {
                     <input
                       type="text"
                       value={formData.cpf}
-                      onChange={(e) => setFormData(prev => ({ ...prev, cpf: e.target.value }))}
+                      onChange={handleCPFChange}
+                      placeholder="000.000.000-00"
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                       required
                     />
@@ -961,6 +1125,54 @@ const PacientesPage: React.FC = () => {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Exclusão de Avaliação */}
+      {showDeleteAvaliacaoConfirm && avaliacaoToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-xl font-bold text-gray-800 mb-4">Confirmar Exclusão</h3>
+            <p className="text-gray-600 mb-6">
+              Tem certeza que deseja excluir a avaliação <strong>{avaliacaoToDelete.numero_laudo}</strong>?
+              <br /><br />
+              <span className="text-sm text-gray-500">
+                Data: {new Date(avaliacaoToDelete.data_aplicacao).toLocaleDateString('pt-BR')}
+                <br />
+                Tipo: {avaliacaoToDelete.tipo_habilitacao}
+              </span>
+              <br /><br />
+              <strong className="text-red-600">Esta ação não pode ser desfeita.</strong>
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowDeleteAvaliacaoConfirm(false);
+                  setAvaliacaoToDelete(null);
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDeleteAvaliacao}
+                disabled={deleteAvaliacaoMutation.isPending}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all disabled:opacity-50 flex items-center gap-2"
+              >
+                {deleteAvaliacaoMutation.isPending ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Excluindo...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Excluir
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

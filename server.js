@@ -13,6 +13,8 @@ const avaliacoesRoutes = require('./routes/avaliacoes');
 const tabelasRoutes = require('./routes/tabelas');
 const estoqueRoutes = require('./routes/estoque');
 const relatoriosRoutes = require('./routes/relatorios');
+const usuariosRoutes = require('./routes/usuarios');
+const configuracoesRoutes = require('./routes/configuracoes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -24,26 +26,53 @@ app.use(compression());
 // Confiar em proxy local (evita warnings do rate-limiter em dev)
 app.set('trust proxy', 1);
 
-// Rate limiting
+// Rate limiting - Mais permissivo em desenvolvimento
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutos
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limite de 100 requests por IP
+  max: process.env.NODE_ENV === 'production' 
+    ? parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100 
+    : 10000, // 10000 requests em desenvolvimento
   message: 'Muitas tentativas de acesso. Tente novamente em alguns minutos.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => {
+    // Pular rate limit para requisições OPTIONS em desenvolvimento
+    return process.env.NODE_ENV !== 'production' && req.method === 'OPTIONS';
+  }
 });
 app.use(limiter);
 
 // Middleware de logging
 app.use(morgan('combined'));
 
-// Middleware de CORS
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://seudominio.com'] 
-    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'],
-  credentials: true
-}));
+// Middleware de CORS - DEVE vir ANTES de todas as rotas
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Permitir requests sem origin (como mobile apps ou curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = process.env.NODE_ENV === 'production'
+      ? ['https://seudominio.com']
+      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://127.0.0.1:3000'];
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400, // 24 horas
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+
+// Tratar preflight requests explicitamente
+app.options('*', cors(corsOptions));
 
 // Middleware para parsing
 app.use(express.json({ limit: '10mb' }));
@@ -61,6 +90,8 @@ app.use('/api/avaliacoes', avaliacoesRoutes);
 app.use('/api/tabelas', tabelasRoutes);
 app.use('/api/estoque', estoqueRoutes);
 app.use('/api/relatorios', relatoriosRoutes);
+app.use('/api/usuarios', usuariosRoutes);
+app.use('/api/configuracoes', configuracoesRoutes);
 
 // Rota raiz
 app.get('/', (req, res) => {
