@@ -62,7 +62,7 @@ router.post('/login', validate(loginSchema), async (req, res) => {
 
     // Buscar usuário
     const result = await query(
-      'SELECT id, nome, email, senha_hash, ativo, foto_url FROM usuarios WHERE email = $1',
+      'SELECT id, nome, email, senha_hash, ativo, foto_url, perfil, crp, especialidade FROM usuarios WHERE email = $1',
       [email]
     );
 
@@ -98,7 +98,10 @@ router.post('/login', validate(loginSchema), async (req, res) => {
         nome: user.nome,
         email: user.email,
         ativo: user.ativo,
-        foto_url: user.foto_url
+        foto_url: user.foto_url,
+        perfil: user.perfil,
+        crp: user.crp,
+        especialidade: user.especialidade
       },
       token
     });
@@ -126,7 +129,7 @@ router.get('/verify', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const result = await query(
-      'SELECT id, nome, email, ativo, foto_url FROM usuarios WHERE id = $1',
+      'SELECT id, nome, email, ativo, foto_url, perfil, crp, especialidade FROM usuarios WHERE id = $1',
       [decoded.userId]
     );
 
@@ -146,12 +149,15 @@ router.get('/verify', async (req, res) => {
 
     res.json({
       valid: true,
-      user: {
+      data: {
         id: user.id,
         nome: user.nome,
         email: user.email,
         ativo: user.ativo,
-        foto_url: user.foto_url
+        foto_url: user.foto_url,
+        perfil: user.perfil,
+        crp: user.crp,
+        especialidade: user.especialidade
       }
     });
   } catch (error) {
