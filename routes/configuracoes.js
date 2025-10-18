@@ -88,9 +88,6 @@ router.post('/backup', authenticateToken, async (req, res) => {
   try {
     const fs = require('fs');
     const path = require('path');
-    const { exec } = require('child_process');
-    const util = require('util');
-    const execPromise = util.promisify(exec);
 
     // Criar diretório de backups se não existir
     const backupDir = path.join(__dirname, '..', 'backups');
@@ -99,44 +96,67 @@ router.post('/backup', authenticateToken, async (req, res) => {
     }
 
     // Gerar nome do arquivo com timestamp
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0] + '_' + 
-                      new Date().toTimeString().split(' ')[0].replace(/:/g, '-');
-    const backupFile = path.join(backupDir, `backup-${timestamp}.sql`);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
+    const backupFile = path.join(backupDir, `backup-${timestamp}.json`);
 
-    // Obter credenciais do banco de dados
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) {
-      return res.status(500).json({ error: 'URL do banco de dados não configurada' });
+    // Buscar todos os dados do banco
+    const tables = [
+      'pacientes',
+      'avaliacoes', 
+      'resultados_testes',
+      'estoque_testes',
+      'movimentacoes_estoque',
+      'usuarios',
+      'configuracoes_clinica',
+      'logs_sistema'
+    ];
+
+    const backupData = {
+      timestamp: new Date().toISOString(),
+      version: '1.0.0',
+      data: {}
+    };
+
+    // Fazer backup de cada tabela
+    for (const table of tables) {
+      try {
+        const result = await query(`SELECT * FROM ${table}`);
+        backupData.data[table] = result.rows;
+      } catch (err) {
+        console.warn(`Aviso: Não foi possível fazer backup da tabela ${table}:`, err.message);
+        backupData.data[table] = [];
+      }
     }
 
-    // Fazer backup usando pg_dump
-    const command = `pg_dump "${dbUrl}" > "${backupFile}"`;
+    // Salvar backup em arquivo JSON
+    fs.writeFileSync(backupFile, JSON.stringify(backupData, null, 2), 'utf8');
     
+    // Registrar backup no banco de dados
     try {
-      await execPromise(command);
-      
-      // Registrar backup no banco de dados
       await query(`
         INSERT INTO logs_sistema (tipo, descricao, usuario_id)
         VALUES ('backup', 'Backup realizado com sucesso: ${path.basename(backupFile)}', $1)
       `, [req.user.id]);
-
-      res.json({
-        success: true,
-        message: 'Backup realizado com sucesso!',
-        arquivo: path.basename(backupFile),
-        data: new Date().toISOString()
-      });
-    } catch (execError) {
-      console.error('Erro ao executar backup:', execError);
-      res.status(500).json({ 
-        error: 'Erro ao executar backup. Verifique se o PostgreSQL está instalado e configurado.',
-        details: execError.message
-      });
+    } catch (logError) {
+      console.warn('Não foi possível registrar log:', logError.message);
     }
+
+    // Obter informações do arquivo
+    const stats = fs.statSync(backupFile);
+
+    res.json({
+      success: true,
+      message: 'Backup realizado com sucesso!',
+      arquivo: path.basename(backupFile),
+      tamanho: stats.size,
+      data: new Date().toISOString()
+    });
   } catch (error) {
     console.error('Erro ao fazer backup:', error);
-    res.status(500).json({ error: 'Erro ao fazer backup' });
+    res.status(500).json({ 
+      error: 'Erro ao fazer backup',
+      details: error.message 
+    });
   }
 });
 
@@ -151,9 +171,6 @@ router.post('/backup/restaurar', authenticateToken, async (req, res) => {
 
     const fs = require('fs');
     const path = require('path');
-    const { exec } = require('child_process');
-    const util = require('util');
-    const execPromise = util.promisify(exec);
 
     const backupDir = path.join(__dirname, '..', 'backups');
     const backupFile = path.join(backupDir, arquivo);
@@ -163,39 +180,75 @@ router.post('/backup/restaurar', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Arquivo de backup não encontrado' });
     }
 
-    // Obter credenciais do banco de dados
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) {
-      return res.status(500).json({ error: 'URL do banco de dados não configurada' });
+    // Ler o arquivo de backup
+    const backupContent = fs.readFileSync(backupFile, 'utf8');
+    const backupData = JSON.parse(backupContent);
+
+    if (!backupData.data) {
+      return res.status(400).json({ error: 'Formato de backup inválido' });
     }
 
-    // Restaurar usando psql
-    const command = `psql "${dbUrl}" < "${backupFile}"`;
+    // Desabilitar triggers e constraints temporariamente
+    await query('SET session_replication_role = replica;');
+
+    let restoredTables = 0;
+    let errors = [];
+
+    // Restaurar cada tabela
+    for (const [tableName, rows] of Object.entries(backupData.data)) {
+      try {
+        if (rows.length === 0) continue;
+
+        // Limpar tabela atual (exceto se for logs_sistema)
+        if (tableName !== 'logs_sistema') {
+          await query(`TRUNCATE TABLE ${tableName} RESTART IDENTITY CASCADE;`);
+        }
+
+        // Inserir dados
+        for (const row of rows) {
+          const columns = Object.keys(row);
+          const values = Object.values(row);
+          const placeholders = columns.map((_, i) => `$${i + 1}`).join(', ');
+          
+          await query(
+            `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders})`,
+            values
+          );
+        }
+
+        restoredTables++;
+      } catch (err) {
+        console.error(`Erro ao restaurar tabela ${tableName}:`, err.message);
+        errors.push({ table: tableName, error: err.message });
+      }
+    }
+
+    // Reabilitar triggers e constraints
+    await query('SET session_replication_role = DEFAULT;');
     
+    // Registrar restauração no banco de dados
     try {
-      await execPromise(command);
-      
-      // Registrar restauração no banco de dados
       await query(`
         INSERT INTO logs_sistema (tipo, descricao, usuario_id)
-        VALUES ('restauracao', 'Backup restaurado: ${arquivo}', $1)
+        VALUES ('restauracao', 'Backup restaurado: ${arquivo} (${restoredTables} tabelas)', $1)
       `, [req.user.id]);
-
-      res.json({
-        success: true,
-        message: 'Backup restaurado com sucesso!',
-        arquivo: arquivo
-      });
-    } catch (execError) {
-      console.error('Erro ao restaurar backup:', execError);
-      res.status(500).json({ 
-        error: 'Erro ao restaurar backup',
-        details: execError.message
-      });
+    } catch (logError) {
+      console.warn('Não foi possível registrar log:', logError.message);
     }
+
+    res.json({
+      success: true,
+      message: `Backup restaurado com sucesso! ${restoredTables} tabelas restauradas.`,
+      arquivo: arquivo,
+      tabelasRestauradas: restoredTables,
+      erros: errors.length > 0 ? errors : undefined
+    });
   } catch (error) {
     console.error('Erro ao restaurar backup:', error);
-    res.status(500).json({ error: 'Erro ao restaurar backup' });
+    res.status(500).json({ 
+      error: 'Erro ao restaurar backup',
+      details: error.message
+    });
   }
 });
 
@@ -215,7 +268,7 @@ router.get('/backups', authenticateToken, async (req, res) => {
 
     // Listar arquivos de backup
     const files = fs.readdirSync(backupDir)
-      .filter(file => file.endsWith('.sql'))
+      .filter(file => file.endsWith('.json') || file.endsWith('.sql'))
       .map(file => {
         const stats = fs.statSync(path.join(backupDir, file));
         return {
