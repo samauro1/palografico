@@ -46,6 +46,7 @@ export default function ConfiguracoesPage() {
     email: 'joao@clinica.com',
     crp: 'CRP 06/123456',
     especialidade: 'Psicologia do Trânsito',
+    perfil: 'psicologo',
     senha_atual: '',
     nova_senha: '',
     confirmar_senha: ''
@@ -130,7 +131,8 @@ export default function ConfiguracoesPage() {
         nome: perfilData.nome,
         email: perfilData.email,
         crp: perfilData.crp,
-        especialidade: perfilData.especialidade
+        especialidade: perfilData.especialidade,
+        perfil: perfilData.perfil
       };
 
       // Incluir foto se foi carregada
@@ -151,13 +153,13 @@ export default function ConfiguracoesPage() {
       
       toast.success('Perfil atualizado com sucesso!');
       
-      // Limpar campos de senha
-      setPerfilData({
-        ...perfilData,
+      // Limpar apenas campos de senha, mantendo os outros dados
+      setPerfilData(prev => ({
+        ...prev,
         senha_atual: '',
         nova_senha: '',
         confirmar_senha: ''
-      });
+      }));
     } catch (error: any) {
       console.error('Erro ao salvar perfil:', error);
       toast.error(error.response?.data?.error || 'Erro ao atualizar perfil');
@@ -265,6 +267,7 @@ export default function ConfiguracoesPage() {
         email: user.email || '',
         crp: user.crp || '',
         especialidade: user.especialidade || '',
+        perfil: user.perfil || 'psicologo',
         senha_atual: '',
         nova_senha: '',
         confirmar_senha: ''
@@ -592,8 +595,14 @@ export default function ConfiguracoesPage() {
             {activeTab === 'perfil' && (
               <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
                 <div>
-                  <h2 className="text-2xl font-bold text-gray-800 mb-1">👤 Perfil do Usuário</h2>
+                  <h2 className="text-2xl font-bold text-gray-800 mb-1">👤 Meu Perfil</h2>
                   <p className="text-sm text-gray-600">Gerencie suas informações pessoais e credenciais</p>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-blue-800">
+                    ℹ️ <strong>Sobre esta seção:</strong> Aqui você edita <strong>seus próprios dados</strong>. Para gerenciar outros usuários do sistema, acesse a aba "Usuários".
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -618,6 +627,20 @@ export default function ConfiguracoesPage() {
                   </div>
 
                   <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Tipo de Usuário</label>
+                    <select
+                      value={perfilData.perfil}
+                      onChange={(e) => setPerfilData({ ...perfilData, perfil: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    >
+                      <option value="administrador">👑 Administrador</option>
+                      <option value="psicologo">🧠 Psicólogo</option>
+                      <option value="recepcionista">📋 Recepcionista</option>
+                      <option value="estagiario">📚 Estagiário</option>
+                    </select>
+                  </div>
+
+                  <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">CRP</label>
                     <input
                       type="text"
@@ -628,7 +651,7 @@ export default function ConfiguracoesPage() {
                     />
                   </div>
 
-                  <div>
+                  <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-700 mb-2">Especialidade</label>
                     <input
                       type="text"

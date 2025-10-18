@@ -260,7 +260,7 @@ router.get('/permissoes/:perfil', authenticateToken, async (req, res) => {
 router.put('/perfil/me', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { nome, email, foto_url, crp, especialidade, senha } = req.body;
+    const { nome, email, foto_url, crp, especialidade, perfil, senha } = req.body;
 
     // Construir query dinamicamente
     let updateFields = [];
@@ -294,6 +294,15 @@ router.put('/perfil/me', authenticateToken, async (req, res) => {
     if (especialidade !== undefined) {
       updateFields.push(`especialidade = $${paramCount++}`);
       values.push(especialidade);
+    }
+    if (perfil) {
+      // Validar perfil
+      const validPerfis = ['administrador', 'psicologo', 'recepcionista', 'estagiario'];
+      if (!validPerfis.includes(perfil)) {
+        return res.status(400).json({ error: 'Tipo de usuário inválido' });
+      }
+      updateFields.push(`perfil = $${paramCount++}`);
+      values.push(perfil);
     }
     if (senha) {
       const bcrypt = require('bcryptjs');
