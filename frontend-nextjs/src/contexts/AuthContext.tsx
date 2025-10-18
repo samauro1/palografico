@@ -67,7 +67,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const verifyToken = async () => {
     try {
       const response = await api.get('/auth/verify');
-      setUser(response.data.user);
+      setUser(response.data.data || response.data.user);
     } catch (error: unknown) {
       console.error('Erro ao verificar token:', error);
       if (typeof window !== 'undefined') {
