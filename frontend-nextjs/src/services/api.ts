@@ -63,6 +63,15 @@ export const usuariosService = {
 export const configuracoesService = {
   getClinica: () => api.get('/configuracoes/clinica'),
   updateClinica: (data: any) => api.put('/configuracoes/clinica', data),
+  // Backup e Restauração
+  fazerBackup: () => api.post('/configuracoes/backup'),
+  restaurarBackup: (arquivo: string) => api.post('/configuracoes/backup/restaurar', { arquivo }),
+  listarBackups: () => api.get('/configuracoes/backups'),
+  // Logs
+  getLogs: (params?: { tipo?: string; limite?: number; offset?: number }) => 
+    api.get('/configuracoes/logs', { params }),
+  registrarLog: (tipo: string, descricao: string) => 
+    api.post('/configuracoes/log', { tipo, descricao }),
 };
 
 export const pacientesService = {

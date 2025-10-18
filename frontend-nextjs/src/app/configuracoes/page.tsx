@@ -189,9 +189,48 @@ export default function ConfiguracoesPage() {
     // TODO: Implementar exportação
   };
 
-  const handleBackup = () => {
-    toast.success('Backup realizado com sucesso!');
-    // TODO: Implementar backup
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [showLogsModal, setShowLogsModal] = useState(false);
+  const [showRestoreModal, setShowRestoreModal] = useState(false);
+  const [backupsDisponiveis, setBackupsDisponiveis] = useState<any[]>([]);
+
+  const handleBackup = async () => {
+    try {
+      setBackupLoading(true);
+      const response = await configuracoesService.fazerBackup();
+      toast.success(response.data.message || 'Backup realizado com sucesso!');
+      // Recarregar lista de backups
+      await carregarBackups();
+    } catch (error: any) {
+      console.error('Erro ao fazer backup:', error);
+      toast.error(error.response?.data?.error || 'Erro ao fazer backup');
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const carregarBackups = async () => {
+    try {
+      const response = await configuracoesService.listarBackups();
+      setBackupsDisponiveis(response.data.data || []);
+    } catch (error) {
+      console.error('Erro ao carregar backups:', error);
+    }
+  };
+
+  const handleRestaurarBackup = async (arquivo: string) => {
+    if (!confirm('Tem certeza que deseja restaurar este backup? Todos os dados atuais serão substituídos!')) {
+      return;
+    }
+    
+    try {
+      const response = await configuracoesService.restaurarBackup(arquivo);
+      toast.success(response.data.message || 'Backup restaurado com sucesso!');
+      setShowRestoreModal(false);
+    } catch (error: any) {
+      console.error('Erro ao restaurar backup:', error);
+      toast.error(error.response?.data?.error || 'Erro ao restaurar backup');
+    }
   };
 
   // Query para carregar configurações da clínica
@@ -456,6 +495,18 @@ export default function ConfiguracoesPage() {
 
   const usuarios = usuariosData?.data || [];
   const perfis = perfisData?.data || [];
+
+  // Query para logs
+  const { data: logsData, refetch: refetchLogs } = useQuery({
+    queryKey: ['logs'],
+    queryFn: async () => {
+      const response = await configuracoesService.getLogs({ limite: 100 });
+      return response.data;
+    },
+    enabled: showLogsModal
+  });
+
+  const logs = logsData?.data || [];
 
   return (
     <Layout>
@@ -1264,18 +1315,38 @@ export default function ConfiguracoesPage() {
                     <div className="flex gap-3">
                       <button
                         onClick={handleBackup}
-                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all"
+                        disabled={backupLoading}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <Download className="w-4 h-4" />
-                        Fazer Backup Agora
+                        {backupLoading ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                            Processando...
+                          </>
+                        ) : (
+                          <>
+                            <Download className="w-4 h-4" />
+                            Fazer Backup Agora
+                          </>
+                        )}
                       </button>
-                      <button className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all">
+                      <button 
+                        onClick={() => {
+                          carregarBackups();
+                          setShowRestoreModal(true);
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all"
+                      >
                         <Upload className="w-4 h-4" />
                         Restaurar Backup
                       </button>
                     </div>
                     <p className="text-xs text-gray-500 mt-3">
-                      Último backup: Nunca realizado
+                      {backupsDisponiveis.length > 0 ? (
+                        <>Último backup: {new Date(backupsDisponiveis[0]?.data).toLocaleString('pt-BR')}</>
+                      ) : (
+                        'Nenhum backup realizado'
+                      )}
                     </p>
                   </div>
 
@@ -1338,7 +1409,10 @@ export default function ConfiguracoesPage() {
                         </p>
                       </div>
                     </div>
-                    <button className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all">
+                    <button 
+                      onClick={() => setShowLogsModal(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all"
+                    >
                       <Eye className="w-4 h-4" />
                       Ver Logs de Acesso
                     </button>
@@ -1533,6 +1607,142 @@ export default function ConfiguracoesPage() {
                       Salvar
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal de Restaurar Backup */}
+        {showRestoreModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 max-h-[80vh] overflow-y-auto">
+              <h3 className="text-2xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <Upload className="w-6 h-6 text-blue-600" />
+                Restaurar Backup
+              </h3>
+
+              <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p className="text-sm text-yellow-800">
+                  ⚠️ <strong>Atenção:</strong> Restaurar um backup substituirá todos os dados atuais do sistema. Esta ação não pode ser desfeita.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {backupsDisponiveis.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <Download className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                    <p>Nenhum backup disponível</p>
+                  </div>
+                ) : (
+                  backupsDisponiveis.map((backup) => (
+                    <div key={backup.nome} className="flex items-center justify-between p-4 border-2 border-gray-200 rounded-lg hover:border-blue-300 transition-all">
+                      <div>
+                        <p className="font-semibold text-gray-800">{backup.nome}</p>
+                        <p className="text-sm text-gray-600">
+                          {new Date(backup.data).toLocaleString('pt-BR')} • {(backup.tamanho / 1024).toFixed(2)} KB
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleRestaurarBackup(backup.nome)}
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all"
+                      >
+                        <Upload className="w-4 h-4" />
+                        Restaurar
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="flex justify-end mt-6">
+                <button
+                  onClick={() => setShowRestoreModal(false)}
+                  className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-all"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal de Logs de Acesso */}
+        {showLogsModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-xl shadow-xl max-w-4xl w-full p-6 max-h-[80vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+                  <Shield className="w-6 h-6 text-red-600" />
+                  Logs de Acesso ao Sistema
+                </h3>
+                <button
+                  onClick={() => refetchLogs()}
+                  className="flex items-center gap-2 px-3 py-2 bg-blue-100 text-blue-600 rounded-lg hover:bg-blue-200 transition-all"
+                >
+                  <Eye className="w-4 h-4" />
+                  Atualizar
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {logs.length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <Shield className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+                    <p>Nenhum log registrado</p>
+                  </div>
+                ) : (
+                  logs.map((log: any) => (
+                    <div key={log.id} className="flex items-start gap-4 p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-all">
+                      <div className="flex-shrink-0">
+                        {log.tipo === 'login' && <Key className="w-5 h-5 text-green-600" />}
+                        {log.tipo === 'logout' && <Key className="w-5 h-5 text-gray-600" />}
+                        {log.tipo === 'backup' && <Download className="w-5 h-5 text-blue-600" />}
+                        {log.tipo === 'restauracao' && <Upload className="w-5 h-5 text-purple-600" />}
+                        {log.tipo === 'erro' && <XCircle className="w-5 h-5 text-red-600" />}
+                        {!['login', 'logout', 'backup', 'restauracao', 'erro'].includes(log.tipo) && (
+                          <Shield className="w-5 h-5 text-gray-600" />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs px-2 py-1 rounded-full font-semibold ${
+                            log.tipo === 'login' ? 'bg-green-100 text-green-800' :
+                            log.tipo === 'logout' ? 'bg-gray-100 text-gray-800' :
+                            log.tipo === 'backup' ? 'bg-blue-100 text-blue-800' :
+                            log.tipo === 'restauracao' ? 'bg-purple-100 text-purple-800' :
+                            log.tipo === 'erro' ? 'bg-red-100 text-red-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {log.tipo.toUpperCase()}
+                          </span>
+                          <span className="text-sm text-gray-600">
+                            {new Date(log.created_at).toLocaleString('pt-BR')}
+                          </span>
+                        </div>
+                        <p className="text-gray-800 mt-1">{log.descricao}</p>
+                        {log.usuario_nome && (
+                          <p className="text-sm text-gray-600 mt-1">
+                            👤 {log.usuario_nome} ({log.usuario_email})
+                          </p>
+                        )}
+                        {log.ip_address && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            IP: {log.ip_address}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="flex justify-end mt-6">
+                <button
+                  onClick={() => setShowLogsModal(false)}
+                  className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-all"
+                >
+                  Fechar
                 </button>
               </div>
             </div>
