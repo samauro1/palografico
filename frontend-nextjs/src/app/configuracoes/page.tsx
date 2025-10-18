@@ -128,7 +128,9 @@ export default function ConfiguracoesPage() {
 
       const dataToSave: any = {
         nome: perfilData.nome,
-        email: perfilData.email
+        email: perfilData.email,
+        crp: perfilData.crp,
+        especialidade: perfilData.especialidade
       };
 
       // Incluir foto se foi carregada
@@ -136,15 +138,26 @@ export default function ConfiguracoesPage() {
         dataToSave.foto_url = fotoPreview;
       }
 
+      // Incluir senha se foi alterada
+      if (perfilData.nova_senha) {
+        dataToSave.senha = perfilData.nova_senha;
+      }
+
       await usuariosService.updatePerfil(dataToSave);
       
-      // Recarregar dados do usuário no AuthContext
+      // Recarregar dados do usuário
+      queryClient.invalidateQueries({ queryKey: ['user-profile'] });
       await authService.verify();
       
       toast.success('Perfil atualizado com sucesso!');
       
-      // Resetar preview para não enviar novamente
-      setFotoPreview(null);
+      // Limpar campos de senha
+      setPerfilData({
+        ...perfilData,
+        senha_atual: '',
+        nova_senha: '',
+        confirmar_senha: ''
+      });
     } catch (error: any) {
       console.error('Erro ao salvar perfil:', error);
       toast.error(error.response?.data?.error || 'Erro ao atualizar perfil');
@@ -232,6 +245,35 @@ export default function ConfiguracoesPage() {
       toast.error(error.response?.data?.error || 'Erro ao restaurar backup');
     }
   };
+
+  // Query para carregar dados do usuário logado
+  const { data: userDataDB } = useQuery({
+    queryKey: ['user-profile'],
+    queryFn: async () => {
+      const response = await authService.verify();
+      return response.data;
+    },
+    enabled: activeTab === 'perfil'
+  });
+
+  // Atualizar estado local quando carregar dados do usuário
+  React.useEffect(() => {
+    if (userDataDB?.data) {
+      const user = userDataDB.data;
+      setPerfilData({
+        nome: user.nome || '',
+        email: user.email || '',
+        crp: user.crp || '',
+        especialidade: user.especialidade || '',
+        senha_atual: '',
+        nova_senha: '',
+        confirmar_senha: ''
+      });
+      if (user.foto_url) {
+        setFotoPreview(user.foto_url);
+      }
+    }
+  }, [userDataDB]);
 
   // Query para carregar configurações da clínica
   const { data: clinicaDataDB } = useQuery({

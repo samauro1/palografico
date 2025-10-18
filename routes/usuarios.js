@@ -260,7 +260,7 @@ router.get('/permissoes/:perfil', authenticateToken, async (req, res) => {
 router.put('/perfil/me', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { nome, email, foto_url } = req.body;
+    const { nome, email, foto_url, crp, especialidade, senha } = req.body;
 
     // Construir query dinamicamente
     let updateFields = [];
@@ -287,6 +287,20 @@ router.put('/perfil/me', authenticateToken, async (req, res) => {
       updateFields.push(`foto_url = $${paramCount++}`);
       values.push(foto_url);
     }
+    if (crp !== undefined) {
+      updateFields.push(`crp = $${paramCount++}`);
+      values.push(crp);
+    }
+    if (especialidade !== undefined) {
+      updateFields.push(`especialidade = $${paramCount++}`);
+      values.push(especialidade);
+    }
+    if (senha) {
+      const bcrypt = require('bcryptjs');
+      const hashedPassword = await bcrypt.hash(senha, 10);
+      updateFields.push(`senha = $${paramCount++}`);
+      values.push(hashedPassword);
+    }
 
     if (updateFields.length === 0) {
       return res.status(400).json({ error: 'Nenhum campo para atualizar' });
@@ -299,7 +313,7 @@ router.put('/perfil/me', authenticateToken, async (req, res) => {
       UPDATE usuarios
       SET ${updateFields.join(', ')}
       WHERE id = $${paramCount}
-      RETURNING id, nome, email, perfil, ativo, foto_url, created_at, updated_at
+      RETURNING id, nome, email, perfil, ativo, foto_url, crp, especialidade, created_at, updated_at
     `, values);
 
     if (result.rows.length === 0) {
