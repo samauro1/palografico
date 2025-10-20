@@ -3,82 +3,95 @@ const router = express.Router();
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-
-// Simulação de acesso ao certificado digital e-CPF
-// Em produção, isso seria implementado com bibliotecas como:
-// - node-pkcs11 (para acesso direto ao leitor CCID)
-// - ou integração com serviços como Lacuna Software
+const certificadoA3Service = require('../utils/certificadoA3Service');
 
 /**
- * Lista certificados disponíveis no leitor CCID
+ * Lista certificados REAIS disponíveis no leitor CCID/Token A3
  */
 router.get('/certificados', async (req, res) => {
   try {
-    // Em produção, aqui seria feita a comunicação real com o leitor CCID
-    // Para demonstração, retornamos certificados simulados
-    const certificados = [
-      {
-        id: 'cert-001',
-        nome: 'MAURO ARIEL SANCHEZ',
-        cpf: '237.244.708-43',
-        validade: '2025-12-31',
-        tipo: 'e-CPF',
-        status: 'ativo'
-      }
-    ];
-
-    res.json({
-      success: true,
-      certificados,
-      message: 'Certificados carregados com sucesso'
-    });
+    console.log('🔍 Listando certificados REAIS do token A3...');
+    
+    const resultado = await certificadoA3Service.listarCertificados();
+    
+    if (resultado.success && resultado.certificados.length > 0) {
+      res.json({
+        success: true,
+        certificados: resultado.certificados,
+        message: `${resultado.certificados.length} certificado(s) encontrado(s) no token A3`
+      });
+    } else {
+      res.json({
+        success: false,
+        certificados: [],
+        message: 'Nenhum certificado encontrado. Conecte o token A3.'
+      });
+    }
 
   } catch (error) {
-    console.error('Erro ao listar certificados:', error);
+    console.error('❌ Erro ao listar certificados:', error);
+    
+    // Mensagens de erro mais específicas
+    let mensagem = 'Erro ao acessar certificados digitais';
+    
+    if (error.message.includes('Driver do token')) {
+      mensagem = 'Driver do token A3 não encontrado. Instale o driver do fabricante (SafeNet, Gemalto, etc.)';
+    } else if (error.message.includes('Nenhum leitor')) {
+      mensagem = 'Token A3 não detectado. Conecte o token na porta USB.';
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Erro ao acessar certificados digitais'
+      message: mensagem,
+      detalhes: error.message
     });
   }
 });
 
 /**
- * Valida um certificado digital
+ * Valida um certificado digital com PIN
  */
 router.post('/validar-certificado', async (req, res) => {
   try {
-    const { certificadoId } = req.body;
+    const { certificadoInfo, pin } = req.body;
 
-    if (!certificadoId) {
+    if (!certificadoInfo || !pin) {
       return res.status(400).json({
         success: false,
-        message: 'ID do certificado é obrigatório'
+        message: 'Certificado e PIN são obrigatórios'
       });
     }
 
-    // Em produção, aqui seria feita a validação real do certificado
-    const certificado = {
-      id: certificadoId,
-      nome: 'MAURO ARIEL SANCHEZ',
-      cpf: '237.244.708-43',
-      validade: '2025-12-31',
-      tipo: 'e-CPF',
-      status: 'válido',
-      autoridadeCertificadora: 'ICP-Brasil',
-      validadeDesde: '2024-01-01'
-    };
-
-    res.json({
-      success: true,
-      certificado,
-      message: 'Certificado válido'
-    });
+    console.log('🔐 Validando certificado com PIN...');
+    
+    // Validar certificado REAL com PIN
+    const resultado = await certificadoA3Service.validarCertificadoComPIN(certificadoInfo, pin);
+    
+    if (resultado.success) {
+      res.json({
+        success: true,
+        message: 'Certificado e PIN válidos',
+        certificado: certificadoInfo
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: 'PIN incorreto ou certificado inválido'
+      });
+    }
 
   } catch (error) {
-    console.error('Erro ao validar certificado:', error);
-    res.status(500).json({
+    console.error('❌ Erro ao validar certificado:', error);
+    
+    let mensagem = 'Erro ao validar certificado digital';
+    if (error.message.includes('PIN incorreto')) {
+      mensagem = 'PIN incorreto. Verifique o PIN do seu token A3.';
+    }
+    
+    res.status(400).json({
       success: false,
-      message: 'Erro ao validar certificado digital'
+      message: mensagem,
+      detalhes: error.message
     });
   }
 });
@@ -89,53 +102,78 @@ router.post('/validar-certificado', async (req, res) => {
 router.post('/assinar-documento', async (req, res) => {
   try {
     const { 
-      certificadoId, 
+      certificadoInfo,
+      pin,
       documentoHash, 
       tipoDocumento,
       dadosDocumento 
     } = req.body;
 
-    if (!certificadoId || !documentoHash) {
+    if (!certificadoInfo || !pin || !documentoHash) {
       return res.status(400).json({
         success: false,
-        message: 'Certificado e hash do documento são obrigatórios'
+        message: 'Certificado, PIN e hash do documento são obrigatórios'
       });
     }
 
-    // Em produção, aqui seria feita a assinatura real com o certificado
-    const assinaturaDigital = {
-      id: `sig-${Date.now()}`,
-      certificadoId,
-      documentoHash,
-      algoritmoassinatura: 'SHA256withRSA',
-      timestamp: new Date().toISOString(),
-      assinatura: crypto.createHash('sha256').update(documentoHash + certificadoId).digest('hex'),
-      certificado: {
-        nome: 'MAURO ARIEL SANCHEZ',
-        cpf: '237.244.708-43',
-        crp: '06/127348',
-        validade: '2025-12-31'
-      }
-    };
+    console.log('✍️ Assinando documento com token A3 REAL...');
+    
+    // Assinar documento com token A3 REAL
+    const resultado = await certificadoA3Service.assinarDocumento(
+      certificadoInfo,
+      pin,
+      documentoHash
+    );
+    
+    if (resultado.success) {
+      const assinaturaDigital = {
+        id: `sig-${Date.now()}`,
+        certificadoId: certificadoInfo.id,
+        documentoHash,
+        algoritmoassinatura: resultado.algoritmo,
+        timestamp: resultado.timestamp,
+        assinatura: resultado.assinatura, // Assinatura REAL criptográfica
+        certificado: {
+          nome: certificadoInfo.nome,
+          cpf: certificadoInfo.cpf,
+          validade: certificadoInfo.validade
+        }
+      };
 
-    // Log da assinatura
-    console.log(`📝 Documento assinado digitalmente:`, {
-      tipo: tipoDocumento,
-      certificado: assinaturaDigital.certificado.nome,
-      timestamp: assinaturaDigital.timestamp
-    });
+      // Log da assinatura
+      console.log(`✅ Documento assinado com token A3 REAL:`, {
+        tipo: tipoDocumento,
+        certificado: assinaturaDigital.certificado.nome,
+        timestamp: assinaturaDigital.timestamp,
+        algoritmo: resultado.algoritmo
+      });
 
-    res.json({
-      success: true,
-      assinatura: assinaturaDigital,
-      message: 'Documento assinado com sucesso'
-    });
+      res.json({
+        success: true,
+        assinatura: assinaturaDigital,
+        message: 'Documento assinado digitalmente com sucesso (ASSINATURA REAL)'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Erro ao assinar documento'
+      });
+    }
 
   } catch (error) {
-    console.error('Erro ao assinar documento:', error);
+    console.error('❌ Erro ao assinar documento:', error);
+    
+    let mensagem = 'Erro ao assinar documento digitalmente';
+    if (error.message.includes('PIN incorreto')) {
+      mensagem = 'PIN incorreto. Verifique o PIN do seu token A3.';
+    } else if (error.message.includes('Chave privada')) {
+      mensagem = 'Chave privada não encontrada no token.';
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Erro ao assinar documento digitalmente'
+      message: mensagem,
+      detalhes: error.message
     });
   }
 });

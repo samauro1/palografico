@@ -21,6 +21,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR" suppressHydrationWarning>
+      <head>
+        {/* Lacuna Web PKI - Para assinatura digital com certificado A3 no navegador */}
+        <script src="https://cdn.lacunasoftware.com/libs/web-pki/lacuna-web-pki-2.16.1.min.js"></script>
+      </head>
       <body className={inter.className}>
         <ThemeProvider>
           <QueryProvider>

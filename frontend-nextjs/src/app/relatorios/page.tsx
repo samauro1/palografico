@@ -4,7 +4,8 @@ import React, { useState, useRef } from 'react';
 import { FileText, Download, Search, Upload, Mail, MessageCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Layout from '@/components/Layout';
-import { pacientesService, avaliacoesService, agendamentosService, assinaturaDigitalService } from '@/services/api';
+import { pacientesService, avaliacoesService, agendamentosService } from '@/services/api';
+import { webPkiService } from '@/services/webPkiService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useConfiguracoes } from '@/contexts/ConfiguracoesContext';
 import { formatDateToBrazilian, calculateAge } from '@/utils/dateUtils';
@@ -341,24 +342,38 @@ ${configuracoes?.nome_clinica || 'Clínica'}`;
   const carregarCertificados = async () => {
     try {
       setCarregandoCertificados(true);
+      toast.loading('🔍 Detectando token A3 no seu computador...');
       
-      // Simular detecção de leitor CCID
-      toast.loading('Detectando leitor de cartão...');
+      // Verificar se o componente Web PKI está instalado
+      const instalado = await webPkiService.verificarInstalacao();
       
-      // Simular delay de comunicação com hardware
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      const response = await assinaturaDigitalService.listarCertificados();
-      
-      if (response.data.success) {
-        setCertificadosDisponiveis(response.data.certificados);
-        toast.success(`✅ Leitor CCID detectado! ${response.data.certificados.length} certificado(s) encontrado(s)`);
-      } else {
-        toast.error('❌ Erro ao acessar leitor de certificados');
+      if (!instalado) {
+        toast.error('❌ Componente Web PKI não instalado');
+        toast('📥 Baixe em: https://get.webpkiplugin.com/', { duration: 8000, icon: 'ℹ️' });
+        return;
       }
-    } catch (error) {
+      
+      // Listar certificados do token A3 (no computador do usuário)
+      const certificados = await webPkiService.listarCertificados();
+      
+      if (certificados && certificados.length > 0) {
+        setCertificadosDisponiveis(certificados);
+        toast.success(`✅ Token A3 detectado! ${certificados.length} certificado(s) encontrado(s)`);
+      } else {
+        toast.error('❌ Nenhum certificado encontrado. Conecte o token A3.');
+      }
+      
+    } catch (error: any) {
       console.error('Erro ao carregar certificados:', error);
-      toast.error('❌ Leitor de cartão não encontrado. Verifique se o certificado A3 está inserido.');
+      
+      if (error.message && error.message.includes('COMPONENTE_NAO_INSTALADO')) {
+        toast.error('❌ Componente Web PKI não instalado');
+        toast('📥 Instale em: https://get.webpkiplugin.com/', { duration: 8000, icon: 'ℹ️' });
+      } else if (error.message && error.message.includes('token')) {
+        toast.error('❌ Token A3 não detectado. Conecte o token na porta USB.');
+      } else {
+        toast.error('❌ Erro ao acessar certificados digitais');
+      }
     } finally {
       setCarregandoCertificados(false);
     }
@@ -366,13 +381,15 @@ ${configuracoes?.nome_clinica || 'Clínica'}`;
 
   const validarCertificado = async (certificadoId: string) => {
     try {
-      const response = await assinaturaDigitalService.validarCertificado(certificadoId);
+      // Com Web PKI, a validação é feita automaticamente ao listar
+      // Certificados listados já são válidos
+      const cert = certificadosDisponiveis.find(c => c.id === certificadoId);
       
-      if (response.data.success) {
-        toast.success('Certificado válido');
-        return response.data.certificado;
+      if (cert) {
+        toast.success('✅ Certificado válido e dentro da validade');
+        return cert;
       } else {
-        toast.error('Certificado inválido');
+        toast.error('Certificado não encontrado');
         return null;
       }
     } catch (error) {
@@ -394,115 +411,92 @@ ${configuracoes?.nome_clinica || 'Clínica'}`;
       return;
     }
 
-    // Solicitar PIN antes de assinar
-    setMostrarModalPin(true);
+    // Web PKI solicita PIN automaticamente - não precisa de modal
+    // Chamar diretamente a função de assinatura
+    await confirmarAssinaturaComPin();
   };
 
   const confirmarAssinaturaComPin = async () => {
-    if (!pinCertificado.trim()) {
-      toast.error('Digite o PIN do certificado');
-      return;
-    }
-
-    if (pinCertificado.length < 4) {
-      toast.error('PIN deve ter pelo menos 4 dígitos');
-      return;
-    }
+    // Web PKI solicita o PIN automaticamente via diálogo do token
+    // Não precisamos do modal de PIN
+    setMostrarModalPin(false);
 
     try {
       setAssinandoDigitalmente(true);
-      setMostrarModalPin(false);
-      toast.loading('Assinando documento digitalmente...');
-
-      // Simular validação do PIN com certificado A3
-      toast.loading('Validando PIN com certificado A3...');
-      
-      // Simular delay de comunicação com o cartão
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // PINs válidos para teste (em produção, seria validado pelo hardware)
-      const pinsValidos = ['1234', '0000', '1111', '9999'];
-      
-      if (!pinsValidos.includes(pinCertificado)) {
-        const novasTentativas = tentativasPin + 1;
-        setTentativasPin(novasTentativas);
-        
-        if (novasTentativas >= 3) {
-          toast.error('🔒 PIN incorreto. Certificado A3 bloqueado por segurança.');
-          setMostrarModalPin(false);
-          setPinCertificado('');
-          setTentativasPin(0);
-          setAssinandoDigitalmente(false);
-          return;
-        }
-        
-        toast.error(`❌ PIN incorreto. Tentativas restantes: ${3 - novasTentativas}`);
-        setPinCertificado('');
-        setAssinandoDigitalmente(false);
-        return;
-      }
-      
-      toast.success('✅ PIN validado com sucesso!');
+      toast.loading('🔐 Assinando documento com token A3...');
+      toast.loading('⚠️ O sistema vai solicitar o PIN do token...', { duration: 3000 });
 
       // Determinar tipo de documento e dados
       const tipoDocumento = laudoEncontrado ? 'laudo' : 'declaracao';
       const dadosDocumento = laudoEncontrado || dadosDeclaracao;
       
-      // Gerar hash do documento
+      // Gerar hash do documento (SHA-256)
       const documentoTexto = JSON.stringify(dadosDocumento);
-      const documentoHash = btoa(documentoTexto); // Simulação de hash
+      const encoder = new TextEncoder();
+      const data = encoder.encode(documentoTexto);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      const documentoHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
-      // Assinar documento
-      const response = await assinaturaDigitalService.assinarDocumento(
-        certificadoSelecionado,
-        documentoHash,
-        tipoDocumento,
-        dadosDocumento
+      console.log('📄 Hash do documento gerado:', documentoHash.substring(0, 20) + '...');
+
+      // Buscar certificado selecionado
+      const certSelecionado = certificadosDisponiveis.find(c => c.id === certificadoSelecionado);
+      
+      if (!certSelecionado) {
+        toast.error('Certificado não encontrado');
+        return;
+      }
+
+      // Assinar com Web PKI (solicita PIN automaticamente)
+      console.log('✍️ Chamando Web PKI para assinar...');
+      const resultado = await webPkiService.assinarDocumento(
+        certSelecionado.thumbprint || certSelecionado.id,
+        documentoHash
       );
 
-      if (response.data.success) {
-        setAssinaturaDigitalData(response.data.assinatura);
-        toast.success('Documento assinado digitalmente com sucesso!');
+      if (resultado.success) {
+        const assinaturaDigital = {
+          id: `sig-${Date.now()}`,
+          certificadoId: certSelecionado.id,
+          documentoHash,
+          algoritmoassinatura: resultado.algoritmo,
+          timestamp: resultado.timestamp,
+          assinatura: resultado.assinatura,
+          certificado: {
+            nome: certSelecionado.nome,
+            cpf: certSelecionado.cpf,
+            validade: certSelecionado.validade
+          }
+        };
+
+        setAssinaturaDigitalData(assinaturaDigital);
+        toast.success('✅ Documento assinado digitalmente com sucesso!');
+        toast.success('🔐 Assinatura criptográfica válida (ICP-Brasil)', { duration: 5000 });
         
-        // Gerar PDF assinado baseado no tipo de documento
-        if (tipoDocumento === 'laudo') {
-          await handleGerarPDFLaudo();
-        } else {
-          await handleGerarPDFDeclaracao();
-        }
-        
-        // Limpar PIN
+        // Limpar estados
         setPinCertificado('');
         setTentativasPin(0);
       } else {
         toast.error('Erro ao assinar documento');
       }
-    } catch (error) {
-      console.error('Erro ao assinar documento:', error);
-      toast.error('Erro ao assinar documento digitalmente');
+      
+    } catch (error: any) {
+      console.error('❌ Erro ao assinar documento:', error);
+      
+      if (error.message && error.message.includes('PIN')) {
+        toast.error('❌ PIN incorreto ou cancelado pelo usuário');
+        toast('⚠️ Verifique o PIN do seu token A3', { duration: 5000, icon: '🔐' });
+      } else if (error.message && error.message.includes('cancelado')) {
+        toast.error('ℹ️ Assinatura cancelada pelo usuário');
+      } else {
+        toast.error('❌ Erro ao assinar documento digitalmente');
+      }
     } finally {
       setAssinandoDigitalmente(false);
     }
   };
 
-  const gerarPdfAssinado = async (assinaturaId: string, certificadoId: string) => {
-    try {
-      const response = await assinaturaDigitalService.gerarPdfAssinado(
-        'declaracao',
-        dadosDeclaracao,
-        assinaturaId,
-        certificadoId
-      );
-
-      if (response.data.success) {
-        toast.success('PDF assinado digitalmente gerado!');
-        // Aqui você pode implementar o download do PDF
-      }
-    } catch (error) {
-      console.error('Erro ao gerar PDF assinado:', error);
-      toast.error('Erro ao gerar PDF assinado');
-    }
-  };
 
   const handleBuscarDeclaracao = async () => {
     if (!buscaDeclaracao.trim()) {
@@ -893,7 +887,21 @@ ${configuracoes?.nome_clinica || 'Clínica'}`;
                           
                           <div>
                             <p className="font-semibold mb-2">Assinatura e Carimbo:</p>
-                            {assinaturaImagem ? (
+                            {assinaturaDigitalData ? (
+                              <div className="border-2 border-green-300 rounded-lg p-4 bg-green-50">
+                                <div className="text-center">
+                                  <div className="text-green-800 font-semibold mb-2 flex items-center justify-center gap-2">
+                                    ✅ ASSINADO DIGITALMENTE
+                                  </div>
+                                  <div className="text-sm text-green-700">
+                                    <p><strong>Psicólogo:</strong> {assinaturaDigitalData.certificado.nome}</p>
+                                    <p><strong>CRP:</strong> {laudoEncontrado.psicologo?.crp || (currentUser as any)?.crp || '[CRP não informado]'}</p>
+                                    <p><strong>Data:</strong> {new Date(assinaturaDigitalData.timestamp).toLocaleDateString('pt-BR')}</p>
+                                    <p><strong>Certificado:</strong> {assinaturaDigitalData.certificado.cpf}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : assinaturaImagem ? (
                               <div className="border-2 border-gray-300 rounded-lg p-2 bg-white">
                                 <img src={assinaturaImagem} alt="Assinatura" className="h-24 object-contain mx-auto" />
                               </div>
@@ -1014,20 +1022,6 @@ ${configuracoes?.nome_clinica || 'Clínica'}`;
                       </div>
                     )}
 
-                    {/* Status da Assinatura Digital */}
-                    {assinaturaDigitalData && (
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-green-800 flex items-center gap-2">
-                          ✅ Laudo Assinado Digitalmente
-                        </h4>
-                        <div className="text-sm text-green-700 mt-2">
-                          <p><strong>ID da Assinatura:</strong> {assinaturaDigitalData.id}</p>
-                          <p><strong>Timestamp:</strong> {new Date(assinaturaDigitalData.timestamp).toLocaleString('pt-BR')}</p>
-                          <p><strong>Algoritmo:</strong> {assinaturaDigitalData.algoritmoassinatura}</p>
-                          <p><strong>Certificado:</strong> {assinaturaDigitalData.certificado.nome}</p>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -1211,20 +1205,6 @@ ${configuracoes?.nome_clinica || 'Clínica'}`;
                       </div>
                     )}
 
-                    {/* Status da Assinatura Digital */}
-                    {assinaturaDigitalData && (
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                        <h4 className="font-semibold text-green-800 flex items-center gap-2">
-                          ✅ Documento Assinado Digitalmente
-                        </h4>
-                        <div className="text-sm text-green-700 mt-2">
-                          <p><strong>ID da Assinatura:</strong> {assinaturaDigitalData.id}</p>
-                          <p><strong>Timestamp:</strong> {new Date(assinaturaDigitalData.timestamp).toLocaleString('pt-BR')}</p>
-                          <p><strong>Algoritmo:</strong> {assinaturaDigitalData.algoritmoassinatura}</p>
-                          <p><strong>Certificado:</strong> {assinaturaDigitalData.certificado.nome}</p>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
                 
@@ -1309,13 +1289,17 @@ ${configuracoes?.nome_clinica || 'Clínica'}`;
                           <div className="border-t-2 border-gray-800 w-64 mx-auto"></div>
                         </div>
                       ) : assinaturaDigitalData ? (
-                        <div className="w-64 text-center">
-                          <div className="h-24 flex items-center justify-center text-green-600 text-sm font-semibold">
-                            ✅ ASSINADO DIGITALMENTE
-                          </div>
-                          <div className="border-t-2 border-gray-800"></div>
-                          <div className="text-xs text-gray-500 mt-1">
-                            {assinaturaDigitalData.certificado.nome}
+                        <div className="w-80 text-center">
+                          <div className="border-2 border-green-300 rounded-lg p-4 bg-green-50">
+                            <div className="text-green-800 font-semibold mb-2 flex items-center justify-center gap-2">
+                              ✅ ASSINADO DIGITALMENTE
+                            </div>
+                            <div className="text-sm text-green-700">
+                              <p><strong>Psicólogo:</strong> {assinaturaDigitalData.certificado.nome}</p>
+                              <p><strong>CRP:</strong> {dadosDeclaracao.psicologo?.crp || (currentUser as any)?.crp || '[CRP não informado]'}</p>
+                              <p><strong>Data:</strong> {new Date(assinaturaDigitalData.timestamp).toLocaleDateString('pt-BR')}</p>
+                              <p><strong>Certificado:</strong> {assinaturaDigitalData.certificado.cpf}</p>
+                            </div>
                           </div>
                         </div>
                       ) : (

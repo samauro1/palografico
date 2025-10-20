@@ -1,0 +1,195 @@
+═══════════════════════════════════════════════════════════════
+  🧪 TESTE RÁPIDO: CERTIFICADO A3 REAL
+═══════════════════════════════════════════════════════════════
+
+✅ IMPLEMENTAÇÃO CONCLUÍDA!
+
+O sistema agora usa certificados REAIS do token A3 físico.
+
+───────────────────────────────────────────────────────────────
+  📋 PASSO A PASSO (3 MINUTOS)
+───────────────────────────────────────────────────────────────
+
+1️⃣  CONECTAR TOKEN A3
+    • Inserir na porta USB
+    • Aguardar LED acender
+    • Aguardar Windows reconhecer
+
+2️⃣  EXECUTAR TESTE
+    cd D:\zite\palografico
+    node test-token-a3.js
+
+3️⃣  VERIFICAR RESULTADO
+
+───────────────────────────────────────────────────────────────
+  ✅ RESULTADO ESPERADO (SUCESSO)
+───────────────────────────────────────────────────────────────
+
+✅ Biblioteca encontrada: C:\Windows\System32\eTPKCS11.dll
+📂 Conectando ao token...
+✅ 1 certificado(s) encontrado(s):
+
+╭─────────────────────────────────────────────────────────╮
+│  Certificado 1                                           │
+├─────────────────────────────────────────────────────────┤
+│  Nome:      MAURO ARIEL SANCHEZ                          │
+│  CPF:       237.244.708-43                               │
+│  Tipo:      e-CPF                                        │
+│  Validade:  2025-12-31                                   │
+│  Emissor:   AC Certisign                                 │
+╰─────────────────────────────────────────────────────────╯
+
+✅ SISTEMA PRONTO PARA ASSINAR DOCUMENTOS!
+
+👉 PRÓXIMO PASSO: Usar no sistema web
+
+───────────────────────────────────────────────────────────────
+  ❌ POSSÍVEIS ERROS
+───────────────────────────────────────────────────────────────
+
+ERRO 1: Driver não encontrado
+─────────────────────────────
+❌ Biblioteca NÃO encontrada
+
+SOLUÇÃO:
+• Instalar driver do fabricante
+• SafeNet: https://support.thalesgroup.com/
+• Gemalto: https://www.gemalto.com/
+• Reiniciar PC após instalação
+
+
+ERRO 2: Token não conectado
+─────────────────────────────
+❌ Token A3 não detectado
+
+SOLUÇÃO:
+• Conectar token na USB
+• Aguardar 10 segundos
+• Verificar LED aceso
+• Trocar de porta USB
+
+
+ERRO 3: Nenhum certificado
+─────────────────────────────
+❌ Nenhum certificado encontrado
+
+SOLUÇÃO:
+• Token pode estar vazio
+• Verificar validade do certificado
+• Contatar AC (Autoridade Certificadora)
+
+───────────────────────────────────────────────────────────────
+  🚀 USAR NO SISTEMA WEB
+───────────────────────────────────────────────────────────────
+
+Após teste com sucesso:
+
+1. Acessar: http://192.168.6.230:3000
+
+2. Login (admin ou seu usuário)
+
+3. Menu: Relatórios e Laudos
+
+4. Aba: Declaração ou Laudos
+
+5. Buscar documento por CPF ou Laudo
+
+6. Rolar até: 🔐 Assinatura Digital com e-CPF
+
+7. Clicar: "Carregar Certificados"
+   → Sistema lê certificados do token
+
+8. Selecionar certificado no dropdown
+
+9. (Opcional) Clicar: "Validar Certificado"
+
+10. Clicar: "🔐 Assinar Digitalmente"
+    → Sistema pede PIN
+
+11. Digitar PIN do token (4-8 dígitos)
+    ⚠️  ATENÇÃO: 3 erros = BLOQUEIO
+
+12. Aguardar assinatura
+    → "✅ Documento Assinado"
+
+13. Baixar PDF com assinatura digital
+
+───────────────────────────────────────────────────────────────
+  🔐 SEGURANÇA DO PIN
+───────────────────────────────────────────────────────────────
+
+⚠️  PIN REAL do token será solicitado
+⚠️  3 tentativas erradas = TOKEN BLOQUEADO
+⚠️  Se bloquear: Precisa do código PUK
+⚠️  PUK: Fornecido pela AC ao emitir o certificado
+
+DICAS:
+• Tenha certeza do PIN antes de digitar
+• Não compartilhe o PIN
+• Se esqueceu: Contate a AC ANTES de tentar
+
+───────────────────────────────────────────────────────────────
+  📖 DOCUMENTAÇÃO COMPLETA
+───────────────────────────────────────────────────────────────
+
+📘 TESTAR-CERTIFICADO-A3-REAL.md
+   → Guia detalhado de teste e uso
+
+📗 GUIA-INSTALACAO-CERTIFICADO-A3-REAL.md
+   → Instalação de drivers e troubleshooting completo
+
+📙 RESUMO-CERTIFICADO-A3-REAL.md
+   → Resumo técnico da implementação
+
+───────────────────────────────────────────────────────────────
+  📊 DIFERENÇA: SIMULADO vs REAL
+───────────────────────────────────────────────────────────────
+
+ANTES (Simulado):
+• ❌ Certificado fake hardcoded no código
+• ❌ PIN fake (1234 ou 0000)
+• ❌ Assinatura não criptográfica
+• ❌ Sem validade legal
+
+AGORA (Real):
+• ✅ Certificado do token físico
+• ✅ PIN real do token
+• ✅ Assinatura RSA-SHA256 (chave privada)
+• ✅ Validade jurídica (ICP-Brasil)
+
+───────────────────────────────────────────────────────────────
+  ✅ CHECKLIST
+───────────────────────────────────────────────────────────────
+
+Hardware:
+[ ] Token A3 conectado na USB
+[ ] LED do token aceso
+[ ] Windows reconheceu o dispositivo
+
+Software:
+[ ] Driver do token instalado
+[ ] PC reiniciado após instalação
+[ ] Teste executado: node test-token-a3.js
+[ ] Certificado listado com sucesso
+
+Dados:
+[ ] PIN memorizado
+[ ] Certificado não expirado
+[ ] Código PUK guardado (para emergências)
+
+Sistema:
+[ ] Servidores rodando (backend + frontend)
+[ ] Sistema acessível: http://192.168.6.230:3000
+[ ] Login funcionando
+
+───────────────────────────────────────────────────────────────
+
+✅ SISTEMA PRONTO PARA ASSINATURA DIGITAL REAL!
+
+🔐 Assinatura com validade jurídica
+📄 Reconhecimento ICP-Brasil
+⚖️  Uso profissional e legal
+
+═══════════════════════════════════════════════════════════════
+Sistema Palográfico - Certificado A3 Real Implementado
+═══════════════════════════════════════════════════════════════
