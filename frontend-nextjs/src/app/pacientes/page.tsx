@@ -4,12 +4,13 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Search, Edit, Trash2, FileText, User, Mail, Eye, Send, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { pacientesService, avaliacoesService } from '@/services/api';
 import PhoneInputWithValidation from '@/components/PhoneInputWithValidation';
 import EmailInputWithValidation from '@/components/EmailInputWithValidation';
 import LaudoInput from '@/components/LaudoInput';
 import { formatPhoneDisplay, generateWhatsAppLink } from '@/utils/phoneUtils';
+import { formatDateToBrazilian, calculateAge } from '@/utils/dateUtils';
 import Layout from '@/components/Layout';
 
 interface Patient {
@@ -45,6 +46,8 @@ interface Avaliacao {
 }
 
 const PacientesPage: React.FC = () => {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -78,9 +81,13 @@ const PacientesPage: React.FC = () => {
   });
   const [showDeleteAvaliacaoConfirm, setShowDeleteAvaliacaoConfirm] = useState(false);
   const [avaliacaoToDelete, setAvaliacaoToDelete] = useState<Avaliacao | null>(null);
+  const [showDeleteTesteConfirm, setShowDeleteTesteConfirm] = useState(false);
+  const [testeToDelete, setTesteToDelete] = useState<any>(null);
+  const [expandedLaudo, setExpandedLaudo] = useState<string | null>(null);
+  const [expandedLaudos, setExpandedLaudos] = useState<Set<string>>(new Set());
+  const [testesData, setTestesData] = useState<any>({});
 
   const queryClient = useQueryClient();
-  const router = useRouter();
 
   // Buscar pacientes
   const { data, isLoading, error } = useQuery({
@@ -96,11 +103,13 @@ const PacientesPage: React.FC = () => {
   // Buscar avaliações do paciente selecionado
   const { data: avaliacoesData } = useQuery({
     queryKey: ['avaliacoes-paciente', selectedPatient?.id],
-    queryFn: () => avaliacoesService.list({ 
+    queryFn: () => {
+      return avaliacoesService.list({ 
       page: 1, 
       limit: 100, 
-      search: selectedPatient?.nome || '' 
-    }),
+        paciente_id: selectedPatient?.id 
+      });
+    },
     enabled: !!selectedPatient,
   });
 
@@ -108,16 +117,73 @@ const PacientesPage: React.FC = () => {
   const pagination = (data as any)?.data?.data?.pagination;
   const avaliacoes = (avaliacoesData as any)?.data?.data?.avaliacoes || [];
 
+  // useEffect para abrir modal automaticamente se houver ID na URL
+  React.useEffect(() => {
+    const idParam = searchParams.get('id');
+    if (idParam && !showPatientDetail) {
+      const pacienteId = parseInt(idParam);
+      
+      // Tentar buscar no cache primeiro
+      let paciente = pacientes.find((p: Patient) => p.id === pacienteId);
+      
+      if (paciente) {
+        console.log('✅ Paciente encontrado no cache, abrindo modal...', paciente);
+        setSelectedPatient(paciente);
+        setShowPatientDetail(true);
+        // Limpar o parâmetro da URL após abrir o modal
+        setTimeout(() => router.replace('/pacientes'), 100);
+      } else if (!isLoading) {
+        // Se não estiver no cache e os dados já carregaram, buscar da API
+        console.log('🔍 Paciente não encontrado no cache, buscando da API...', pacienteId);
+        pacientesService.get(pacienteId.toString()).then((response: any) => {
+          console.log('📦 Resposta completa da API:', response);
+          console.log('📦 response.data:', response?.data);
+          console.log('📦 response.data.data:', response?.data?.data);
+          
+          // Tentar ambas as estruturas possíveis
+          const pacienteData = response?.data?.data || response?.data;
+          
+          if (pacienteData && pacienteData.id) {
+            console.log('✅ Paciente encontrado na API, abrindo modal...', pacienteData);
+            setSelectedPatient(pacienteData);
+            setShowPatientDetail(true);
+            setTimeout(() => router.replace('/pacientes'), 100);
+          } else {
+            console.error('❌ Paciente não encontrado - response:', response);
+            toast.error('Avaliado não encontrado');
+            router.replace('/pacientes');
+          }
+        }).catch((error: any) => {
+          console.error('❌ Erro ao buscar paciente:', error);
+          console.error('❌ Detalhes do erro:', error.response?.data);
+          toast.error('Erro ao carregar detalhes do avaliado');
+          router.replace('/pacientes');
+        });
+      }
+    }
+  }, [searchParams, pacientes, isLoading, showPatientDetail, router]);
+  
+  // Agrupar avaliações por número de laudo (não por data)
+  // Múltiplas avaliações com mesmo laudo = mesma avaliação aplicada em datas diferentes
+  const avaliacoesAgrupadas = avaliacoes.reduce((grupos: any, avaliacao: Avaliacao) => {
+    const laudo = avaliacao.numero_laudo;
+    if (!grupos[laudo]) {
+      grupos[laudo] = [];
+    }
+    grupos[laudo].push(avaliacao);
+    return grupos;
+  }, {});
+
   // Mutations
   const createMutation = useMutation({
     mutationFn: pacientesService.create,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pacientes'] });
-      toast.success('Paciente criado com sucesso!');
+      toast.success('Avaliado criado com sucesso!');
       resetForm();
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.error || 'Erro ao criar paciente');
+      toast.error(error.response?.data?.error || 'Erro ao criar avaliado');
     },
   });
 
@@ -125,12 +191,12 @@ const PacientesPage: React.FC = () => {
     mutationFn: ({ id, data }: { id: string; data: any }) => pacientesService.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pacientes'] });
-      toast.success('Paciente atualizado com sucesso!');
+      toast.success('Avaliado atualizado com sucesso!');
       resetForm();
       setShowEditModal(false);
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.error || 'Erro ao atualizar paciente');
+      toast.error(error.response?.data?.error || 'Erro ao atualizar avaliado');
     },
   });
 
@@ -138,18 +204,25 @@ const PacientesPage: React.FC = () => {
     mutationFn: pacientesService.delete,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pacientes'] });
-      toast.success('Paciente excluído com sucesso!');
+      toast.success('Avaliado excluído com sucesso!');
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.error || 'Erro ao excluir paciente');
+      toast.error(error.response?.data?.error || 'Erro ao excluir avaliado');
     },
   });
 
   const createAvaliacaoMutation = useMutation({
     mutationFn: avaliacoesService.create,
-    onSuccess: (response) => {
-      queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
+    onSuccess: async (response) => {
+      // Invalidar e forçar refetch imediato
+      await queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
+      await queryClient.refetchQueries({ queryKey: ['avaliacoes-paciente'] });
+      await queryClient.invalidateQueries({ queryKey: ['pacientes'] });
+      await queryClient.refetchQueries({ queryKey: ['pacientes'] });
       toast.success('Avaliação criada com sucesso!');
+      
+      // Limpar cache de testes para forçar recarregamento
+      setTestesData({});
       
       // Redirecionar para página de testes com dados vinculados E testes pré-selecionados
       const avaliacaoId = (response as any).data?.avaliacao?.id;
@@ -170,30 +243,78 @@ const PacientesPage: React.FC = () => {
 
   const deleteAvaliacaoMutation = useMutation({
     mutationFn: avaliacoesService.delete,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
-      queryClient.invalidateQueries({ queryKey: ['pacientes'] });
+    onSuccess: async () => {
+      // Invalidar e forçar refetch imediato de todas as queries relacionadas
+      await queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
+      await queryClient.refetchQueries({ queryKey: ['avaliacoes-paciente'] });
+      await queryClient.invalidateQueries({ queryKey: ['pacientes'] });
+      await queryClient.refetchQueries({ queryKey: ['pacientes'] });
       toast.success('Avaliação excluída com sucesso!');
       setShowDeleteAvaliacaoConfirm(false);
       setAvaliacaoToDelete(null);
+      // Limpar também o cache de testes
+      setTestesData({});
+      setExpandedLaudo(null);
     },
     onError: (error: any) => {
       toast.error(error.response?.data?.error || 'Erro ao excluir avaliação');
     },
   });
 
-  const calculateAge = (dataNascimento: string): number => {
-    const today = new Date();
-    const birthDate = new Date(dataNascimento);
-    let age = today.getFullYear() - birthDate.getFullYear();
-    const monthDiff = today.getMonth() - birthDate.getMonth();
-    
-    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-      age--;
-    }
-    
-    return age;
-  };
+  // Mutation para deletar teste individual
+  const deleteTesteMutation = useMutation({
+    mutationFn: async (teste: any) => {
+      // TODO: Implementar API para deletar teste individual
+      // Por enquanto, vamos simular
+      return Promise.resolve();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
+      queryClient.invalidateQueries({ queryKey: ['pacientes'] });
+      setShowDeleteTesteConfirm(false);
+      setTesteToDelete(null);
+      toast.success('Resultado do teste excluído com sucesso!');
+      
+      // Recarregar testes do laudo atual
+      if (expandedLaudo) {
+        const laudoAtual = expandedLaudo;
+        setExpandedLaudo(null);
+        setTimeout(() => {
+          handleToggleLaudo(laudoAtual);
+        }, 100);
+      }
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.error || 'Erro ao excluir resultado do teste');
+    },
+  });
+
+  const updateAptidaoMutation = useMutation({
+    mutationFn: ({ id, aptidao }: { id: string; aptidao: string }) => 
+      avaliacoesService.update(id, { aptidao }),
+    onSuccess: async () => {
+      // Invalidar e forçar refetch imediato de todas as queries relacionadas
+      await queryClient.invalidateQueries({ queryKey: ['avaliacoes-paciente'] });
+      await queryClient.refetchQueries({ queryKey: ['avaliacoes-paciente'] });
+      await queryClient.invalidateQueries({ queryKey: ['pacientes'] });
+      await queryClient.refetchQueries({ queryKey: ['pacientes'] });
+      toast.success('Aptidão atualizada com sucesso!');
+      
+      // Se há um laudo expandido, recarregar os testes
+      if (expandedLaudo) {
+        const laudoAtual = expandedLaudo;
+        setExpandedLaudo(null);
+        setTimeout(() => {
+          handleToggleLaudo(laudoAtual);
+        }, 100);
+      }
+    },
+    onError: (error: any) => {
+      toast.error(error.response?.data?.error || 'Erro ao atualizar aptidão');
+    },
+  });
+
+  // Função calculateAge agora vem do dateUtils
 
   const abreviarEscolaridade = (escolaridade: string): string => {
     if (!escolaridade) return '-';
@@ -266,10 +387,24 @@ const PacientesPage: React.FC = () => {
 
   const handleEdit = (paciente: Patient) => {
     setEditingPatient(paciente);
+    
+    // Converter data_nascimento para formato YYYY-MM-DD do input type="date"
+    let dataNascimentoFormatada = '';
+    if (paciente.data_nascimento) {
+      const date = new Date(paciente.data_nascimento);
+      // Garantir que a data seja válida
+      if (!isNaN(date.getTime())) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        dataNascimentoFormatada = `${year}-${month}-${day}`;
+      }
+    }
+    
     setFormData({
       nome: paciente.nome,
       cpf: paciente.cpf,
-      data_nascimento: paciente.data_nascimento || '',
+      data_nascimento: dataNascimentoFormatada,
       numero_laudo: paciente.numero_laudo || '',
       contexto: paciente.contexto || '',
       tipo_transito: paciente.tipo_transito || '',
@@ -299,7 +434,7 @@ const PacientesPage: React.FC = () => {
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir este paciente?')) {
+    if (window.confirm('Tem certeza que deseja excluir este avaliado?')) {
       deleteMutation.mutate(id);
     }
   };
@@ -315,21 +450,10 @@ const PacientesPage: React.FC = () => {
     
     // Gerar número de laudo automaticamente baseado no ID do paciente
     const currentYear = new Date().getFullYear();
-    const laudoNumber = `LAU-${currentYear}-${String(selectedPatient.id).padStart(4, '0')}`;
+    const laudoNumber = selectedPatient.numero_laudo || `LAU-${currentYear}-${String(selectedPatient.id).padStart(4, '0')}`;
     
-    // Determinar tipo de habilitação baseado no contexto do paciente
-    let tipoHabilitacao = '1ª Habilitação';
-    if (selectedPatient.contexto === 'Trânsito' && selectedPatient.tipo_transito) {
-      tipoHabilitacao = selectedPatient.tipo_transito;
-    }
-    
-    setAvaliacaoData(prev => ({
-      ...prev,
-      numero_laudo: laudoNumber,
-      tipo_habilitacao: tipoHabilitacao
-    }));
-    
-    setShowNewAvaliacao(true);
+    // Redirecionar para página de testes com dados pré-preenchidos
+    router.push(`/testes?paciente_id=${selectedPatient.id}&numero_laudo=${encodeURIComponent(laudoNumber)}`);
   };
 
   const handleDeleteAvaliacao = (avaliacao: Avaliacao) => {
@@ -337,9 +461,134 @@ const PacientesPage: React.FC = () => {
     setShowDeleteAvaliacaoConfirm(true);
   };
 
+  const handleDeleteTeste = (teste: any) => {
+    setTesteToDelete(teste);
+    setShowDeleteTesteConfirm(true);
+  };
+
+  const handleToggleLaudo = async (laudo: string) => {
+    const isCurrentlyExpanded = expandedLaudos.has(laudo);
+    
+    if (isCurrentlyExpanded) {
+      // Recolher
+      const newExpanded = new Set(expandedLaudos);
+      newExpanded.delete(laudo);
+      setExpandedLaudos(newExpanded);
+    } else {
+      // Expandir
+      const newExpanded = new Set(expandedLaudos);
+      newExpanded.add(laudo);
+      setExpandedLaudos(newExpanded);
+      
+      // SEMPRE buscar testes novamente (não usar cache) para pegar atualizações
+      const avaliacoesDoLaudo = avaliacoesAgrupadas[laudo];
+      const todosOsTestes: any[] = [];
+      
+      try {
+        for (const avaliacao of avaliacoesDoLaudo) {
+          try {
+            const response = await avaliacoesService.getTestes(avaliacao.id);
+            const testes = (response as any)?.data?.data?.testes || [];
+            
+            testes.forEach((teste: any) => {
+              todosOsTestes.push({
+                ...teste,
+                avaliacaoId: avaliacao.id,
+                numeroLaudo: avaliacao.numero_laudo,
+                dataAplicacao: avaliacao.data_aplicacao
+              });
+            });
+          } catch (error: any) {
+            console.error(`Erro ao buscar testes da avaliação ${avaliacao.numero_laudo}:`, error);
+            // Se der erro em uma avaliação, continua com as outras
+            if (error.response?.status !== 404) {
+              // Se não for 404, pode ser um problema real
+              console.warn('Erro ao buscar testes, mas continuando:', error.message);
+            }
+          }
+        }
+        
+        // Atualizar o cache de testes
+        setTestesData((prev: any) => ({
+          ...prev,
+          [laudo]: todosOsTestes
+        }));
+        
+        if (todosOsTestes.length === 0) {
+          toast('ℹ️ Nenhum teste encontrado para este laudo', {
+            duration: 3000,
+            icon: 'ℹ️'
+          });
+        }
+      } catch (error) {
+        console.error('Erro ao buscar testes:', error);
+        toast.error('Erro ao carregar testes');
+      }
+    }
+  };
+
   const confirmDeleteAvaliacao = () => {
     if (avaliacaoToDelete) {
       deleteAvaliacaoMutation.mutate(avaliacaoToDelete.id);
+    }
+  };
+
+  const handleVerTodas = async () => {
+    const todosLaudos = Object.keys(avaliacoesAgrupadas);
+    
+    // Se todos já estão expandidos, recolher todos
+    const todosExpandidos = todosLaudos.every(laudo => expandedLaudos.has(laudo));
+    
+    if (todosExpandidos) {
+      setExpandedLaudos(new Set());
+      toast('Todas as avaliações foram recolhidas', { icon: '📋', duration: 2000 });
+    } else {
+      // Expandir todos de uma vez
+      toast('⏳ Carregando todas as avaliações...', { icon: '⏳', duration: 2000 });
+      
+      // Criar um novo Set com todos os laudos
+      const novosExpandidos = new Set(expandedLaudos);
+      
+      // Adicionar todos os laudos ao Set
+      todosLaudos.forEach(laudo => novosExpandidos.add(laudo));
+      setExpandedLaudos(novosExpandidos);
+      
+      // Buscar testes de todos os laudos que não foram buscados ainda
+      for (const laudo of todosLaudos) {
+        if (!testesData[laudo]) {
+          const avaliacoesDoLaudo = avaliacoesAgrupadas[laudo];
+          const todosOsTestes: any[] = [];
+          
+          try {
+            for (const avaliacao of avaliacoesDoLaudo) {
+              try {
+                const response = await avaliacoesService.getTestes(avaliacao.id);
+                const testes = (response as any)?.data?.data?.testes || [];
+                
+                testes.forEach((teste: any) => {
+                  todosOsTestes.push({
+                    ...teste,
+                    avaliacaoId: avaliacao.id,
+                    numeroLaudo: avaliacao.numero_laudo,
+                    dataAplicacao: avaliacao.data_aplicacao
+                  });
+                });
+              } catch (error: any) {
+                console.error(`Erro ao buscar testes da avaliação ${avaliacao.numero_laudo}:`, error);
+              }
+            }
+            
+            setTestesData((prev: any) => ({
+              ...prev,
+              [laudo]: todosOsTestes
+            }));
+          } catch (error) {
+            console.error('Erro ao buscar testes:', error);
+          }
+        }
+      }
+      
+      toast.success('✅ Todas as avaliações foram expandidas!');
     }
   };
 
@@ -374,12 +623,14 @@ const PacientesPage: React.FC = () => {
   };
 
   const availableTests = [
-    { id: 'mig', name: 'MIG - Memória Imediata Geral' },
-    { id: 'memore', name: 'MEMORE - Memória de Reconhecimento' },
     { id: 'ac', name: 'AC - Atenção Concentrada' },
-    { id: 'beta-iii', name: 'BETA-III - Bateria de Testes de Inteligência' },
-    { id: 'bpa-2', name: 'BPA-2 - Bateria de Provas de Atenção' },
+    { id: 'beta-iii', name: 'BETA-III - Raciocínio Matricial' },
+    { id: 'bpa2', name: 'BPA-2 - Bateria Psicológica para Avaliação da Atenção' },
     { id: 'rotas', name: 'Rotas de Atenção' },
+    { id: 'memore', name: 'MEMORE - Memória de Reconhecimento' },
+    { id: 'mig', name: 'MIG - Memória Imediata Geral' },
+    { id: 'mvt', name: 'MVT - Memória Visual para o Trânsito' },
+    { id: 'r1', name: 'R-1 - Teste Não-Verbal de Inteligência' },
     { id: 'palografico', name: 'Palográfico' }
   ];
 
@@ -390,11 +641,11 @@ const PacientesPage: React.FC = () => {
     <Layout>
       <div className="p-6">
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Pacientes e Avaliações</h1>
-          <p className="text-gray-600">Gerencie pacientes e suas avaliações psicológicas</p>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Avaliados e Avaliações</h1>
+          <p className="text-gray-600">Gerencie avaliados e suas avaliações psicológicas</p>
         </div>
 
-      {/* Lista de Pacientes */}
+      {/* Lista de Avaliados */}
       <div className="bg-white rounded-lg shadow">
         <div className="p-6 border-b border-gray-200">
           <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
@@ -403,7 +654,7 @@ const PacientesPage: React.FC = () => {
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
                 <input
                   type="text"
-                  placeholder="Buscar pacientes..."
+                  placeholder="Buscar avaliados..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -415,7 +666,7 @@ const PacientesPage: React.FC = () => {
               className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <Plus className="h-4 w-4 mr-2" />
-              Novo Paciente
+              Novo Avaliado
             </button>
           </div>
         </div>
@@ -425,7 +676,7 @@ const PacientesPage: React.FC = () => {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  Paciente
+                  Avaliado
                 </th>
                 <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                   CPF
@@ -461,7 +712,9 @@ const PacientesPage: React.FC = () => {
                     <div className="text-sm font-medium text-gray-900 max-w-[180px] truncate" title={paciente.nome}>
                       {paciente.nome}
                     </div>
-                    <div className="text-xs text-gray-500">ID: {paciente.id}</div>
+                    <div className="text-xs text-gray-500">
+                      {paciente.numero_laudo || `ID: ${paciente.id}`}
+                    </div>
                   </td>
                   <td className="px-3 py-3 text-sm text-gray-900">
                     {paciente.cpf}
@@ -491,7 +744,7 @@ const PacientesPage: React.FC = () => {
                         href={generateWhatsAppLink(paciente.telefone)}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-green-600 hover:text-green-800 text-sm block"
+                        className="text-green-600 hover:text-green-800 text-sm block whitespace-pre-line"
                         title="WhatsApp"
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -602,14 +855,14 @@ const PacientesPage: React.FC = () => {
         )}
       </div>
 
-      {/* Modal de Detalhes do Paciente */}
+      {/* Modal de Detalhes do Avaliado */}
       {showPatientDetail && selectedPatient && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium text-gray-900">
-                  Detalhes do Paciente: {selectedPatient.nome}
+                  Detalhes do Avaliado: {selectedPatient.nome}
                 </h3>
                 <button
                   onClick={() => setShowPatientDetail(false)}
@@ -636,7 +889,7 @@ const PacientesPage: React.FC = () => {
                     <label className="block text-sm font-medium text-gray-700">Data de Nascimento</label>
                     <p className="mt-1 text-sm text-gray-900">
                       {selectedPatient.data_nascimento ? 
-                        `${new Date(selectedPatient.data_nascimento).toLocaleDateString('pt-BR')} (${calculateAge(selectedPatient.data_nascimento)} anos)` 
+                        `${formatDateToBrazilian(selectedPatient.data_nascimento)} (${calculateAge(selectedPatient.data_nascimento)} anos)` 
                         : '-'}
                     </p>
                   </div>
@@ -656,7 +909,7 @@ const PacientesPage: React.FC = () => {
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Telefone</label>
-                    <p className="mt-1 text-sm text-gray-900">
+                    <p className="mt-1 text-sm text-gray-900 whitespace-pre-line">
                       {selectedPatient.telefone ? (
                         <a
                           href={generateWhatsAppLink(selectedPatient.telefone)}
@@ -688,10 +941,18 @@ const PacientesPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Avaliações do Paciente */}
+              {/* Avaliações do Avaliado */}
               <div className="mb-6">
                 <div className="flex justify-between items-center mb-4">
                   <h4 className="text-md font-medium text-gray-900">Avaliações Realizadas</h4>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleVerTodas}
+                      className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <Eye className="h-4 w-4 mr-2" />
+                      {Object.keys(avaliacoesAgrupadas).every(laudo => expandedLaudos.has(laudo)) && Object.keys(avaliacoesAgrupadas).length > 0 ? 'Recolher Todas' : 'Ver Todas'}
+                    </button>
                   <button
                     onClick={handleNewAvaliacao}
                     className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500"
@@ -699,63 +960,490 @@ const PacientesPage: React.FC = () => {
                     <FileText className="h-4 w-4 mr-2" />
                     Nova Avaliação
                   </button>
+                  </div>
                 </div>
 
-                {avaliacoes.length > 0 ? (
-                  <div className="space-y-2">
-                    {avaliacoes.map((avaliacao: Avaliacao) => (
-                      <div key={avaliacao.id} className="border border-gray-200 rounded-lg p-4 hover:border-blue-300 transition-colors">
-                        <div className="flex justify-between items-start gap-4">
+                {Object.keys(avaliacoesAgrupadas).length > 0 ? (
+                  <div className="space-y-4">
+                    {Object.entries(avaliacoesAgrupadas).map(([laudo, avaliacoesArray]: [string, any]) => {
+                      const avaliacoesDoLaudo = avaliacoesArray as Avaliacao[];
+                      const isExpanded = expandedLaudos.has(laudo);
+                      const testes = testesData[laudo] || [];
+                      
+                      // Pegar todas as datas únicas das avaliações deste laudo
+                      const datas = [...new Set(avaliacoesDoLaudo.map(av => 
+                        formatDateToBrazilian(av.data_aplicacao)
+                      ))];
+                      
+                      // Pegar a última aptidão definida
+                      const ultimaAptidao = avaliacoesDoLaudo.find(av => av.aptidao)?.aptidao;
+                      
+                      return (
+                        <div key={laudo} className="border border-gray-200 rounded-lg overflow-hidden">
+                          {/* Cabeçalho do laudo */}
+                          <div className="bg-blue-50 p-4">
+                            <div className="flex justify-between items-center">
                           <div className="flex-1">
-                            <h5 className="font-medium text-gray-900">{avaliacao.numero_laudo}</h5>
-                            <p className="text-sm text-gray-600">
-                              {new Date(avaliacao.data_aplicacao).toLocaleDateString('pt-BR')} - {avaliacao.aplicacao}
-                            </p>
-                            <p className="text-sm text-gray-600">{avaliacao.tipo_habilitacao}</p>
-                            {avaliacao.aptidao && (
-                              <p className={`text-sm font-medium mt-1 ${
-                                avaliacao.aptidao === 'Apto' ? 'text-green-600' :
-                                avaliacao.aptidao === 'Inapto Temporário' ? 'text-yellow-600' :
+                                <h5 className="font-semibold text-gray-900 text-lg mb-2">📋 {laudo}</h5>
+                                <div className="flex flex-wrap gap-2 items-center">
+                                  <span className="text-sm text-gray-600">
+                                    📅 Datas: {datas.join(', ')}
+                                  </span>
+                                  {ultimaAptidao && (
+                                    <span className={`inline-flex items-center px-3 py-1 bg-white rounded-full text-sm font-medium ${
+                                      ultimaAptidao === 'Apto' ? 'text-green-600' :
+                                      ultimaAptidao === 'Inapto Temporário' ? 'text-yellow-600' :
                                 'text-red-600'
                               }`}>
-                                {avaliacao.aptidao === 'Apto' && '✅ '}
-                                {avaliacao.aptidao === 'Inapto Temporário' && '⚠️ '}
-                                {avaliacao.aptidao === 'Inapto' && '❌ '}
-                                {avaliacao.aptidao}
-                              </p>
-                            )}
-                            {avaliacao.observacoes && (
-                              <p className="text-sm text-gray-500 mt-1">{avaliacao.observacoes}</p>
-                            )}
-                          </div>
-                          <div className="flex flex-col items-end gap-2">
-                            <div className="text-xs text-gray-400">
-                              {new Date(avaliacao.created_at).toLocaleDateString('pt-BR')}
+                                      {ultimaAptidao === 'Apto' && '✅ '}
+                                      {ultimaAptidao === 'Inapto Temporário' && '⚠️ '}
+                                      {ultimaAptidao === 'Inapto' && '❌ '}
+                                      {ultimaAptidao}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => handleToggleLaudo(laudo)}
+                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm ml-4"
+                              >
+                                <Eye className="h-4 w-4" />
+                                {isExpanded ? 'Ocultar Resultados' : 'Ver Resultados'}
+                              </button>
                             </div>
+                          </div>
+
+                          {/* Resultados expandidos */}
+                          {isExpanded && (
+                            <div className="p-4 bg-white">
+                              {testes.length > 0 ? (
+                                <div className="space-y-4">
+                                  {testes.map((teste: any, index: number) => (
+                                    <div key={index} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                                      <h6 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                                        <span className="text-blue-600">🧪</span>
+                                        {teste.nome}
+                                        <span className="text-sm text-gray-500 font-normal">
+                                          - {teste.created_at ? 
+                                            new Date(teste.created_at).toLocaleString('pt-BR', {
+                                              day: '2-digit',
+                                              month: '2-digit', 
+                                              year: 'numeric',
+                                              hour: '2-digit',
+                                              minute: '2-digit',
+                                              timeZone: 'America/Sao_Paulo'
+                                            }) : 
+                                            formatDateToBrazilian(teste.dataAplicacao)
+                                          }
+                                        </span>
+                                        <button
+                                          onClick={() => handleDeleteTeste(teste)}
+                                          className="ml-auto text-red-500 hover:text-red-700 p-1"
+                                          title="Excluir este resultado"
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </button>
+                                      </h6>
+                                      
+                                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                        {/* AC */}
+                                        {teste.tipo === 'ac' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* MIG */}
+                                        {teste.tipo === 'mig' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">QI</p>
+                                              <p className="text-lg font-semibold text-indigo-600">{teste.resultado.qi}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* MEMORE */}
+                                        {teste.tipo === 'memore' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Erros</p>
+                                              <p className="text-lg font-semibold text-red-600">{teste.resultado.erros}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* BPA-2 */}
+                                        {teste.tipo === 'bpa2' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Erros</p>
+                                              <p className="text-lg font-semibold text-red-600">{teste.resultado.erros}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* R-1 */}
+                                        {teste.tipo === 'r1' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">QI</p>
+                                              <p className="text-lg font-semibold text-indigo-600">{teste.resultado.qi}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* MVT */}
+                                        {teste.tipo === 'mvt' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Erros</p>
+                                              <p className="text-lg font-semibold text-red-600">{teste.resultado.erros}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* PALOGRÁFICO */}
+                                        {teste.tipo === 'palografico' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Erros</p>
+                                              <p className="text-lg font-semibold text-red-600">{teste.resultado.erros}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* BETA-III */}
+                                        {teste.tipo === 'beta-iii' && (
+                                          <>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Acertos</p>
+                                              <p className="text-lg font-semibold text-green-600">{teste.resultado.acertos}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Percentil</p>
+                                              <p className="text-lg font-semibold text-blue-600">{teste.resultado.percentil}</p>
+                                            </div>
+                                            <div className="bg-white p-3 rounded-md">
+                                              <p className="text-xs text-gray-500">Classificação</p>
+                                              <p className="text-lg font-semibold text-purple-600">{teste.resultado.classificacao}</p>
+                                            </div>
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+
+                                        {/* ROTAS - Array de resultados (A, C, D) */}
+                                        {teste.tipo === 'rotas' && Array.isArray(teste.resultado) && (
+                                          <div className="col-span-3 space-y-3">
+                                            {teste.resultado.map((rota: any, idx: number) => (
+                                              <div key={idx} className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                                <h5 className="font-semibold text-gray-800 mb-3">
+                                                  Atenção {rota.rota_tipo === 'A' ? 'Alternada' : rota.rota_tipo === 'C' ? 'Concentrada' : 'Dividida'} ({rota.rota_tipo})
+                                                </h5>
+                                                <div className="grid grid-cols-3 gap-3">
+                                                  <div className="bg-white p-2 rounded-md">
+                                                    <p className="text-xs text-gray-500">Acertos</p>
+                                                    <p className="text-sm font-semibold text-green-600">{rota.acertos}</p>
+                                                  </div>
+                                                  <div className="bg-white p-2 rounded-md">
+                                                    <p className="text-xs text-gray-500">Erros</p>
+                                                    <p className="text-sm font-semibold text-red-600">{rota.erros}</p>
+                                                  </div>
+                                                  <div className="bg-white p-2 rounded-md">
+                                                    <p className="text-xs text-gray-500">Omissões</p>
+                                                    <p className="text-sm font-semibold text-orange-600">{rota.omissoes}</p>
+                                                  </div>
+                                                  <div className="bg-white p-2 rounded-md">
+                                                    <p className="text-xs text-gray-500">PB</p>
+                                                    <p className="text-sm font-semibold text-indigo-600">{rota.pb}</p>
+                                                  </div>
+                                                  <div className="bg-white p-2 rounded-md">
+                                                    <p className="text-xs text-gray-500">Percentil</p>
+                                                    <p className="text-sm font-semibold text-blue-600">{rota.percentil || '-'}</p>
+                                                  </div>
+                                                  <div className="bg-white p-2 rounded-md">
+                                                    <p className="text-xs text-gray-500">Classificação</p>
+                                                    <p className="text-sm font-semibold text-purple-600">{rota.classificacao || '-'}</p>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            ))}
+                                            
+                                            {/* Tabela Normativa Usada */}
+                                            {teste.tabela_normativa && (
+                                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela Normativa:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
+
+                                        {/* Outros testes - mostrar campos disponíveis */}
+                                        {!['ac', 'mig', 'beta-iii', 'rotas'].includes(teste.tipo) && (
+                                          <>
+                                            {Object.entries(teste.resultado).map(([key, value]: [string, any]) => {
+                                              if (['id', 'avaliacao_id', 'created_at', 'updated_at', 'tabela_normativa_id', 'tabela_normativa_nome'].includes(key)) return null;
+                                              
+                                              // Se o valor for um objeto, converter para string legível
+                                              let displayValue = value;
+                                              if (typeof value === 'object' && value !== null) {
+                                                displayValue = JSON.stringify(value, null, 2);
+                                              }
+                                              
+                                              return (
+                                                <div key={key} className="bg-white p-3 rounded-md">
+                                                  <p className="text-xs text-gray-500 capitalize">{key.replace(/_/g, ' ')}</p>
+                                                  <p className="text-lg font-semibold text-gray-700">{displayValue}</p>
+                                                </div>
+                                              );
+                                            })}
+                                            {teste.tabela_normativa && (
+                                              <div className="col-span-full bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                                <p className="text-xs text-blue-800">
+                                                  <strong>📊 Tabela:</strong> {teste.tabela_normativa}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+                            </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-gray-500 text-center py-4">Carregando testes...</p>
+                              )}
+
+                              {/* Seleção de Aptidão e Botões de ação */}
+                              <div className="mt-6 border-t border-gray-200 pt-4">
+                                {/* Usar a primeira avaliação do laudo para aptidão (todas compartilham) */}
+                                {(() => {
+                                  const primeiraAvaliacao = avaliacoesDoLaudo[0];
+                                  const ultimaAptidaoDefinida = avaliacoesDoLaudo.find(av => av.aptidao)?.aptidao;
+                                  
+                                  return (
+                                    <div>
+                                      <div className="flex items-center justify-between gap-4 mb-4">
+                                        <div className="flex-1">
+                                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Aptidão do Laudo {laudo}
+                                          </label>
                             <div className="flex gap-2">
                               <button
-                                onClick={() => router.push(`/avaliacoes/${avaliacao.id}`)}
-                                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
-                                title="Ver resultados"
-                              >
-                                <Eye className="h-3.5 w-3.5" />
-                                Ver Resultados
+                                              onClick={() => {
+                                                // Atualizar todas as avaliações do laudo
+                                                avaliacoesDoLaudo.forEach((av: Avaliacao) => {
+                                                  updateAptidaoMutation.mutate({ id: av.id, aptidao: 'Apto' });
+                                                });
+                                              }}
+                                              className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                                                ultimaAptidaoDefinida === 'Apto'
+                                                  ? 'bg-green-600 text-white'
+                                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                              }`}
+                                            >
+                                              ✅ Apto
                               </button>
                               <button
+                                              onClick={() => {
+                                                // Atualizar todas as avaliações do laudo
+                                                avaliacoesDoLaudo.forEach((av: Avaliacao) => {
+                                                  updateAptidaoMutation.mutate({ id: av.id, aptidao: 'Inapto Temporário' });
+                                                });
+                                              }}
+                                              className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                                                ultimaAptidaoDefinida === 'Inapto Temporário'
+                                                  ? 'bg-yellow-600 text-white'
+                                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                              }`}
+                                            >
+                                              ⚠️ Inapto Temporário
+                                            </button>
+                                            <button
+                                              onClick={() => {
+                                                // Atualizar todas as avaliações do laudo
+                                                avaliacoesDoLaudo.forEach((av: Avaliacao) => {
+                                                  updateAptidaoMutation.mutate({ id: av.id, aptidao: 'Inapto' });
+                                                });
+                                              }}
+                                              className={`flex-1 px-4 py-2 rounded-md font-medium transition-colors ${
+                                                ultimaAptidaoDefinida === 'Inapto'
+                                                  ? 'bg-red-600 text-white'
+                                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                              }`}
+                                            >
+                                              ❌ Inapto
+                                            </button>
+                                          </div>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Botões de exclusão por data */}
+                                      <div className="flex gap-2 justify-end">
+                                        {avaliacoesDoLaudo.map((avaliacao: Avaliacao) => (
+                                          <button
+                                            key={avaliacao.id}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleDeleteAvaliacao(avaliacao);
                                 }}
                                 className="flex items-center gap-1 px-3 py-1.5 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm"
-                                title="Excluir avaliação"
+                                            title={`Excluir avaliação de ${new Date(avaliacao.data_aplicacao).toLocaleDateString('pt-BR')}`}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
+                                            Excluir {new Date(avaliacao.data_aplicacao).toLocaleDateString('pt-BR')}
                               </button>
+                                        ))}
                             </div>
                           </div>
+                                  );
+                                })()}
                         </div>
                       </div>
-                    ))}
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-center py-8 text-gray-500">
@@ -780,7 +1468,7 @@ const PacientesPage: React.FC = () => {
                   }}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
                 >
-                  Editar Paciente
+                  Editar Avaliado
                 </button>
               </div>
             </div>
@@ -934,14 +1622,14 @@ const PacientesPage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal de Edição/Criação de Paciente */}
+      {/* Modal de Edição/Criação de Avaliado */}
       {showEditModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium text-gray-900">
-                  {editingPatient ? 'Editar Paciente' : 'Novo Paciente'}
+                  {editingPatient ? 'Editar Avaliado' : 'Novo Avaliado'}
                 </h3>
                 <button
                   onClick={() => {
@@ -987,7 +1675,7 @@ const PacientesPage: React.FC = () => {
                     <label className="block text-sm font-medium text-gray-700">Data de Nascimento</label>
                     <input
                       type="date"
-                      value={formData.data_nascimento}
+                      value={formData.data_nascimento || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, data_nascimento: e.target.value }))}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
@@ -1009,7 +1697,7 @@ const PacientesPage: React.FC = () => {
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Contexto</label>
                     <select
-                      value={formData.contexto}
+                      value={formData.contexto || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, contexto: e.target.value }))}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
@@ -1020,12 +1708,11 @@ const PacientesPage: React.FC = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Escolaridade *</label>
+                    <label className="block text-sm font-medium text-gray-700">Escolaridade</label>
                     <select
-                      value={formData.escolaridade}
+                      value={formData.escolaridade || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, escolaridade: e.target.value }))}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
                     >
                       <option value="">Selecione a escolaridade</option>
                       <option value="E. Fundamental">E. Fundamental</option>
@@ -1041,7 +1728,7 @@ const PacientesPage: React.FC = () => {
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Tipo de Trânsito</label>
                     <select
-                      value={formData.tipo_transito}
+                      value={formData.tipo_transito || ''}
                       onChange={(e) => setFormData(prev => ({ ...prev, tipo_transito: e.target.value }))}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
@@ -1085,7 +1772,7 @@ const PacientesPage: React.FC = () => {
                   <label className="block text-sm font-medium text-gray-700">Endereço</label>
                   <input
                     type="text"
-                    value={formData.endereco}
+                    value={formData.endereco || ''}
                     onChange={(e) => setFormData(prev => ({ ...prev, endereco: e.target.value }))}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
@@ -1094,7 +1781,7 @@ const PacientesPage: React.FC = () => {
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Observações</label>
                   <textarea
-                    value={formData.observacoes}
+                    value={formData.observacoes || ''}
                     onChange={(e) => setFormData(prev => ({ ...prev, observacoes: e.target.value }))}
                     rows={3}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1162,6 +1849,62 @@ const PacientesPage: React.FC = () => {
                 className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all disabled:opacity-50 flex items-center gap-2"
               >
                 {deleteAvaliacaoMutation.isPending ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Excluindo...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Excluir
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Exclusão de Teste Individual */}
+      {showDeleteTesteConfirm && testeToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-xl font-bold text-gray-800 mb-4">Confirmar Exclusão</h3>
+            <p className="text-gray-600 mb-6">
+              Tem certeza que deseja excluir o resultado do teste <strong>{testeToDelete.nome}</strong>?
+              <br /><br />
+              <span className="text-sm text-gray-500">
+                Data/Hora: {testeToDelete.created_at ? 
+                  new Date(testeToDelete.created_at).toLocaleString('pt-BR', {
+                    day: '2-digit',
+                    month: '2-digit', 
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZone: 'America/Sao_Paulo'
+                  }) : 
+                  formatDateToBrazilian(testeToDelete.dataAplicacao)
+                }
+              </span>
+              <br /><br />
+              <strong className="text-red-600">Esta ação não pode ser desfeita.</strong>
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowDeleteTesteConfirm(false);
+                  setTesteToDelete(null);
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => deleteTesteMutation.mutate(testeToDelete)}
+                disabled={deleteTesteMutation.isPending}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all disabled:opacity-50 flex items-center gap-2"
+              >
+                {deleteTesteMutation.isPending ? (
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                     Excluindo...

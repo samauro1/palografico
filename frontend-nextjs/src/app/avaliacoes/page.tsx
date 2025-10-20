@@ -5,7 +5,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { avaliacoesService, pacientesService } from '@/services/api';
 import { toast } from 'react-hot-toast';
 import { useRouter } from 'next/navigation';
-import { Eye, Trash2, Search, Calendar, User, FileText, Plus } from 'lucide-react';
+import { Eye, Trash2, Search, Calendar, User, FileText, Plus, ArrowLeft } from 'lucide-react';
+import { useTheme } from '@/contexts/ThemeContext';
 
 interface Avaliacao {
   id: string;
@@ -28,6 +29,7 @@ const AvaliacoesPage: React.FC = () => {
   
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { isDark } = useTheme();
 
   // Buscar avaliações
   const { data, isLoading, error } = useQuery({
@@ -78,19 +80,28 @@ const AvaliacoesPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50 p-8">
+    <div className={`min-h-screen p-8 ${isDark ? 'bg-dark-950' : 'bg-gradient-to-br from-blue-50 to-indigo-50'}`}>
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-800 mb-2 flex items-center gap-3">
+          <div className="flex items-center gap-4 mb-4">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Voltar ao Menu
+            </button>
+          </div>
+          <h1 className={`text-4xl font-bold ${isDark ? 'text-white' : 'text-gray-800'} mb-2 flex items-center gap-3`}>
             <FileText className="w-10 h-10 text-blue-600" />
             Avaliações Psicológicas
           </h1>
-          <p className="text-gray-600">Gerencie as avaliações psicológicas realizadas</p>
+          <p className={`${isDark ? 'text-dark-300' : 'text-gray-600'}`}>Gerencie as avaliações psicológicas realizadas</p>
         </div>
 
         {/* Search and Actions */}
-        <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <div className={`${isDark ? 'bg-dark-800' : 'bg-white'} rounded-xl shadow-sm p-6 mb-6`}>
           <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
             <div className="relative flex-1 w-full md:w-auto">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />

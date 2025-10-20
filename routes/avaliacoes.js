@@ -1,6 +1,6 @@
 const express = require('express');
 const { query } = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, isAdmin } = require('../middleware/auth');
 const { validate, avaliacaoSchema } = require('../middleware/validation');
 
 const router = express.Router();
@@ -17,14 +17,22 @@ router.get('/', async (req, res) => {
     let whereClause = '';
     let queryParams = [];
 
+    // Filtro por usuário (exceto admin) - via avaliacao.usuario_id
+    // Cada usuário vê apenas as avaliações que ELE aplicou
+    if (!isAdmin(req.user)) {
+      whereClause = 'WHERE a.usuario_id = $1';
+      queryParams.push(req.user.id);
+    }
+
     if (search) {
-      whereClause = 'WHERE a.numero_laudo ILIKE $1 OR p.nome ILIKE $1';
+      const searchCondition = `(a.numero_laudo ILIKE $${queryParams.length + 1} OR p.nome ILIKE $${queryParams.length + 1})`;
+      whereClause = whereClause ? `${whereClause} AND ${searchCondition}` : `WHERE ${searchCondition}`;
       queryParams.push(`%${search}%`);
     }
 
     if (paciente_id) {
       const paramIndex = queryParams.length + 1;
-      whereClause += whereClause ? ` AND a.paciente_id = $${paramIndex}` : 'WHERE a.paciente_id = $1';
+      whereClause += whereClause ? ` AND a.paciente_id = $${paramIndex}` : `WHERE a.paciente_id = $${paramIndex}`;
       queryParams.push(paciente_id);
     }
 
@@ -77,6 +85,15 @@ router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Montar query com filtro de usuário se não for admin
+    let whereClause = 'WHERE a.id = $1';
+    let queryParams = [id];
+
+    if (!isAdmin(req.user)) {
+      queryParams.push(req.user.id);
+      whereClause += ' AND a.usuario_id = $2';
+    }
+
     const result = await query(`
       SELECT 
         a.id, a.paciente_id, a.numero_laudo, a.data_aplicacao, a.aplicacao, 
@@ -86,12 +103,12 @@ router.get('/:id', async (req, res) => {
       FROM avaliacoes a 
       JOIN pacientes p ON a.paciente_id = p.id 
       JOIN usuarios u ON a.usuario_id = u.id
-      WHERE a.id = $1
-    `, [id]);
+      ${whereClause}
+    `, queryParams);
 
     if (result.rows.length === 0) {
       return res.status(404).json({
-        error: 'Avaliação não encontrada'
+        error: 'Avaliação não encontrada ou você não tem permissão para acessá-la'
       });
     }
 
@@ -155,14 +172,14 @@ router.post('/', validate(avaliacaoSchema), async (req, res) => {
 });
 
 // Atualizar avaliação
-router.put('/:id', validate(avaliacaoSchema), async (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidao } = req.body;
 
     // Verificar se a avaliação existe
     const existingAvaliacao = await query(
-      'SELECT id FROM avaliacoes WHERE id = $1',
+      'SELECT * FROM avaliacoes WHERE id = $1',
       [id]
     );
 
@@ -172,23 +189,31 @@ router.put('/:id', validate(avaliacaoSchema), async (req, res) => {
       });
     }
 
-    // Não mais verificar se laudo está em uso - agora múltiplas avaliações podem ter o mesmo laudo
-    // Removida verificação de laudo único
+    // Se for uma atualização parcial (apenas aptidão), usar os dados existentes
+    const avaliacaoAtual = existingAvaliacao.rows[0];
+    const dadosAtualizados = {
+      paciente_id: paciente_id !== undefined ? paciente_id : avaliacaoAtual.paciente_id,
+      numero_laudo: numero_laudo !== undefined ? numero_laudo : avaliacaoAtual.numero_laudo,
+      data_aplicacao: data_aplicacao !== undefined ? data_aplicacao : avaliacaoAtual.data_aplicacao,
+      aplicacao: aplicacao !== undefined ? aplicacao : avaliacaoAtual.aplicacao,
+      tipo_habilitacao: tipo_habilitacao !== undefined ? tipo_habilitacao : avaliacaoAtual.tipo_habilitacao,
+      observacoes: observacoes !== undefined ? observacoes : avaliacaoAtual.observacoes,
+      aptidao: aptidao !== undefined ? (aptidao && aptidao.trim() !== '' ? aptidao : null) : avaliacaoAtual.aptidao
+    };
 
-    // Verificar se o paciente existe
-    const paciente = await query(
-      'SELECT id FROM pacientes WHERE id = $1',
-      [paciente_id]
-    );
+    // Se paciente_id foi fornecido, verificar se existe
+    if (paciente_id !== undefined) {
+      const paciente = await query(
+        'SELECT id FROM pacientes WHERE id = $1',
+        [paciente_id]
+      );
 
-    if (paciente.rows.length === 0) {
-      return res.status(400).json({
-        error: 'Paciente não encontrado'
-      });
+      if (paciente.rows.length === 0) {
+        return res.status(400).json({
+          error: 'Paciente não encontrado'
+        });
+      }
     }
-
-    // Converter string vazia para null
-    const aptidaoValue = aptidao && aptidao.trim() !== '' ? aptidao : null;
 
     const result = await query(`
       UPDATE avaliacoes 
@@ -197,7 +222,16 @@ router.put('/:id', validate(avaliacaoSchema), async (req, res) => {
           aptidao = $7, updated_at = CURRENT_TIMESTAMP 
       WHERE id = $8 
       RETURNING id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidao, updated_at
-    `, [paciente_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, observacoes, aptidaoValue, id]);
+    `, [
+      dadosAtualizados.paciente_id, 
+      dadosAtualizados.numero_laudo, 
+      dadosAtualizados.data_aplicacao, 
+      dadosAtualizados.aplicacao, 
+      dadosAtualizados.tipo_habilitacao, 
+      dadosAtualizados.observacoes, 
+      dadosAtualizados.aptidao, 
+      id
+    ]);
 
     res.json({
       message: 'Avaliação atualizada com sucesso',
@@ -245,6 +279,7 @@ router.delete('/:id', async (req, res) => {
 router.get('/:id/testes', async (req, res) => {
   try {
     const { id } = req.params;
+    console.log(`🔍 Buscando testes da avaliação ID: ${id}`);
     
     // Verificar se a avaliação existe
     const avaliacaoResult = await query(
@@ -258,43 +293,70 @@ router.get('/:id/testes', async (req, res) => {
 
     // Buscar todos os testes realizados para esta avaliação
     const testes = [];
+    console.log(`✅ Avaliação encontrada, buscando testes...`);
 
-    // Memore
-    const memoreResult = await query(
-      'SELECT * FROM resultados_memore WHERE avaliacao_id = $1',
-      [id]
-    );
-    if (memoreResult.rows.length > 0) {
-      testes.push({
-        tipo: 'memore',
-        nome: 'Memore - Memória',
-        resultado: memoreResult.rows[0]
-      });
+    // Memore - retornar TODOS os resultados ordenados por data de criação
+    try {
+      console.log('🔍 Buscando MEMORE...');
+      const memoreResult = await query(`
+        SELECT m.*, t.nome as tabela_normativa_nome
+        FROM resultados_memore m
+        LEFT JOIN tabelas_normativas t ON m.tabela_normativa_id = t.id
+        WHERE m.avaliacao_id = $1
+        ORDER BY m.created_at DESC
+      `, [id]);
+      
+      console.log(`📊 MEMORE encontrados: ${memoreResult.rows.length}`);
+      
+      if (memoreResult.rows.length > 0) {
+        // Agrupar todos os resultados de MEMORE
+        memoreResult.rows.forEach((resultado, index) => {
+          testes.push({
+            tipo: 'memore',
+            nome: `MEMORE - Memória ${memoreResult.rows.length > 1 ? `(${index + 1})` : ''}`,
+            resultado: resultado,
+            tabela_normativa: resultado?.tabela_normativa_nome || null,
+            created_at: resultado.created_at
+          });
+        });
+        console.log(`✅ MEMORE processados com sucesso`);
+      }
+    } catch (err) {
+      console.error('❌ ERRO ao processar MEMORE:', err);
+      // Não lança erro, apenas registra e continua
     }
 
     // AC
-    const acResult = await query(
-      'SELECT * FROM resultados_ac WHERE avaliacao_id = $1',
-      [id]
-    );
+    const acResult = await query(`
+      SELECT a.*, t.nome as tabela_normativa_nome
+      FROM resultados_ac a
+      LEFT JOIN tabelas_normativas t ON a.tabela_normativa_id = t.id
+      WHERE a.avaliacao_id = $1
+    `, [id]);
+    
     if (acResult.rows.length > 0) {
       testes.push({
         tipo: 'ac',
         nome: 'AC - Atenção Concentrada',
-        resultado: acResult.rows[0]
+        resultado: acResult.rows[0],
+        tabela_normativa: acResult.rows[0]?.tabela_normativa_nome || null
       });
     }
 
     // BETA-III
-    const betaResult = await query(
-      'SELECT * FROM resultados_beta_iii WHERE avaliacao_id = $1',
-      [id]
-    );
+    const betaResult = await query(`
+      SELECT b.*, t.nome as tabela_normativa_nome
+      FROM resultados_beta_iii b
+      LEFT JOIN tabelas_normativas t ON b.tabela_normativa_id = t.id
+      WHERE b.avaliacao_id = $1
+    `, [id]);
+    
     if (betaResult.rows.length > 0) {
       testes.push({
         tipo: 'beta-iii',
         nome: 'BETA-III - Raciocínio Matricial',
-        resultado: betaResult.rows[0]
+        resultado: betaResult.rows[0],
+        tabela_normativa: betaResult.rows[0]?.tabela_normativa_nome || null
       });
     }
 
@@ -317,70 +379,140 @@ router.get('/:id/testes', async (req, res) => {
       });
     }
 
-    // Rotas
-    const rotasResult = await query(
-      'SELECT * FROM resultados_rotas WHERE avaliacao_id = $1',
-      [id]
-    );
-    if (rotasResult.rows.length > 0) {
-      testes.push({
-        tipo: 'rotas',
-        nome: 'Rotas de Atenção',
-        resultado: rotasResult.rows[0]
-      });
+    // Rotas - retornar TODOS os resultados (sem agrupamento por data por enquanto)
+    try {
+      console.log('🔍 Buscando ROTAS...');
+      const rotasResult = await query(`
+        SELECT r.*, t.nome as tabela_normativa_nome
+        FROM resultados_rotas r
+        LEFT JOIN tabelas_normativas t ON r.tabela_normativa_id = t.id
+        WHERE r.avaliacao_id = $1 
+        ORDER BY r.created_at DESC, r.rota_tipo
+      `, [id]);
+      
+      console.log(`📊 ROTAS encontradas: ${rotasResult.rows.length}`);
+      
+      if (rotasResult.rows.length > 0) {
+        // Por enquanto, retornar tudo como um único bloco (ROTAS A, C, D juntas)
+        testes.push({
+          tipo: 'rotas',
+          nome: 'Rotas de Atenção',
+          resultado: rotasResult.rows.sort((a, b) => a.rota_tipo.localeCompare(b.rota_tipo)),
+          tabela_normativa: rotasResult.rows[0]?.tabela_normativa_nome || null,
+          created_at: rotasResult.rows[0].created_at
+        });
+        console.log(`✅ ROTAS processadas com sucesso`);
+      }
+    } catch (err) {
+      console.error('❌ ERRO ao processar ROTAS:', err);
+      console.error('   Stack:', err.stack);
+      // Não lança erro, apenas registra e continua
     }
 
-    // MIG
-    const migResult = await query(
-      'SELECT * FROM resultados_mig WHERE avaliacao_id = $1',
-      [id]
-    );
-    if (migResult.rows.length > 0) {
-      testes.push({
-        tipo: 'mig',
-        nome: 'MIG - Avaliação Psicológica',
-        resultado: migResult.rows[0]
-      });
+    // MIG - retornar TODOS os resultados ordenados por data de criação
+    try {
+      console.log('🔍 Buscando MIG...');
+      const migResult = await query(`
+        SELECT m.*, t.nome as tabela_normativa_nome
+        FROM resultados_mig m
+        LEFT JOIN tabelas_normativas t ON m.tabela_normativa_id = t.id
+        WHERE m.avaliacao_id = $1
+        ORDER BY m.created_at DESC
+      `, [id]);
+      
+      console.log(`📊 MIG encontrados: ${migResult.rows.length}`);
+      
+      if (migResult.rows.length > 0) {
+        // Agrupar todos os resultados de MIG
+        migResult.rows.forEach((resultado, index) => {
+          testes.push({
+            tipo: 'mig',
+            nome: `MIG - Avaliação Psicológica ${migResult.rows.length > 1 ? `(${index + 1})` : ''}`,
+            resultado: resultado,
+            tabela_normativa: resultado?.tabela_normativa_nome || null,
+            created_at: resultado.created_at
+          });
+        });
+        console.log(`✅ MIG processados com sucesso`);
+      }
+    } catch (err) {
+      console.error('❌ ERRO ao processar MIG:', err);
+      // Não lança erro, apenas registra e continua
     }
 
-    // MVT
-    const mvtResult = await query(
-      'SELECT * FROM resultados_mvt WHERE avaliacao_id = $1',
-      [id]
-    );
+    // MVT - retornar TODOS os resultados ordenados por data de criação
+    const mvtResult = await query(`
+      SELECT m.*, t.nome as tabela_normativa_nome
+      FROM resultados_mvt m
+      LEFT JOIN tabelas_normativas t ON m.tabela_normativa_id = t.id
+      WHERE m.avaliacao_id = $1
+      ORDER BY m.created_at DESC
+    `, [id]);
+    
     if (mvtResult.rows.length > 0) {
-      testes.push({
-        tipo: 'mvt',
-        nome: 'MVT - Memória Visual para o Trânsito',
-        resultado: mvtResult.rows[0]
+      // Agrupar todos os resultados de MVT
+      mvtResult.rows.forEach((resultado, index) => {
+        testes.push({
+          tipo: 'mvt',
+          nome: `MVT - Memória Visual para o Trânsito ${mvtResult.rows.length > 1 ? `(${index + 1})` : ''}`,
+          resultado: resultado,
+          tabela_normativa: resultado?.tabela_normativa_nome || null,
+          created_at: resultado.created_at
+        });
       });
     }
 
-    // R-1
-    const r1Result = await query(
-      'SELECT * FROM resultados_r1 WHERE avaliacao_id = $1',
-      [id]
-    );
+    // R-1 - retornar TODOS os resultados ordenados por data de criação
+    const r1Result = await query(`
+      SELECT r.*, t.nome as tabela_normativa_nome
+      FROM resultados_r1 r
+      LEFT JOIN tabelas_normativas t ON r.tabela_normativa_id = t.id
+      WHERE r.avaliacao_id = $1
+      ORDER BY r.created_at DESC
+    `, [id]);
+    
     if (r1Result.rows.length > 0) {
-      testes.push({
-        tipo: 'r1',
-        nome: 'R-1 - Raciocínio',
-        resultado: r1Result.rows[0]
+      // Agrupar todos os resultados de R-1
+      r1Result.rows.forEach((resultado, index) => {
+        testes.push({
+          tipo: 'r1',
+          nome: `R-1 - Raciocínio ${r1Result.rows.length > 1 ? `(${index + 1})` : ''}`,
+          resultado: resultado,
+          tabela_normativa: resultado?.tabela_normativa_nome || null,
+          created_at: resultado.created_at
+        });
       });
     }
 
-    // Palográfico
-    const palograficoResult = await query(
-      'SELECT * FROM resultados_palografico WHERE avaliacao_id = $1',
-      [id]
-    );
+    // Palográfico - retornar TODOS os resultados ordenados por data de criação
+    const palograficoResult = await query(`
+      SELECT p.*, t.nome as tabela_normativa_nome
+      FROM resultados_palografico p
+      LEFT JOIN tabelas_normativas t ON p.tabela_normativa_id = t.id
+      WHERE p.avaliacao_id = $1
+      ORDER BY p.created_at DESC
+    `, [id]);
+    
     if (palograficoResult.rows.length > 0) {
-      testes.push({
-        tipo: 'palografico',
-        nome: 'Palográfico',
-        resultado: palograficoResult.rows[0]
+      // Agrupar todos os resultados de Palográfico
+      palograficoResult.rows.forEach((resultado, index) => {
+        testes.push({
+          tipo: 'palografico',
+          nome: `Palográfico ${palograficoResult.rows.length > 1 ? `(${index + 1})` : ''}`,
+          resultado: resultado,
+          tabela_normativa: resultado?.tabela_normativa_nome || null,
+          created_at: resultado.created_at
+        });
       });
     }
+
+    // Ordenar todos os testes por data de criação (mais recente primeiro)
+    testes.sort((a, b) => {
+      if (a.created_at && b.created_at) {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+      return 0;
+    });
 
     res.json({
       data: {
@@ -388,8 +520,13 @@ router.get('/:id/testes', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Erro ao buscar testes da avaliação:', error);
-    res.status(500).json({ error: 'Erro interno do servidor' });
+    console.error('❌ Erro ao buscar testes da avaliação:', error);
+    console.error('❌ Stack trace:', error.stack);
+    res.status(500).json({ 
+      error: 'Erro interno do servidor',
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 

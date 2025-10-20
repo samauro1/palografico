@@ -1,7 +1,27 @@
 import axios from 'axios';
 import { Patient, Avaliacao, TestResult, ApiResponse, PaginatedResponse } from '@/types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+// Detectar automaticamente a URL da API baseado no hostname
+const getApiBaseUrl = () => {
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    
+    // Se estiver acessando por um IP da rede local, usar o mesmo IP para o backend
+    if (hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname.startsWith('172.')) {
+      return `http://${hostname}:3001/api`;
+    }
+    
+    // Se estiver em localhost, usar localhost
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:3001/api';
+    }
+  }
+  
+  // Fallback para variável de ambiente ou localhost
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -48,6 +68,7 @@ export const authService = {
   login: (email: string, senha: string) => api.post('/auth/login', { email, senha }),
   register: (nome: string, email: string, senha: string) => api.post('/auth/register', { nome, email, senha }),
   verify: () => api.get('/auth/verify'),
+  logout: () => api.post('/auth/logout'),
 };
 
 export const usuariosService = {
@@ -55,6 +76,9 @@ export const usuariosService = {
   create: (data: any) => api.post('/usuarios', data),
   update: (id: string, data: any) => api.put(`/usuarios/${id}`, data),
   delete: (id: string) => api.delete(`/usuarios/${id}`),
+  desativar: (id: string) => api.patch(`/usuarios/${id}/desativar`),
+  ativar: (id: string) => api.patch(`/usuarios/${id}/ativar`),
+  deletePermanente: (id: string) => api.delete(`/usuarios/${id}/permanente`),
   getPerfis: () => api.get('/usuarios/perfis/disponiveis'),
   getPermissoes: (perfil: string) => api.get(`/usuarios/permissoes/${perfil}`),
   updatePerfil: (data: any) => api.put('/usuarios/perfil/me', data),
@@ -95,6 +119,7 @@ export const tabelasService = {
   list: () => api.get<ApiResponse>('/tabelas'),
   get: (tipo: string) => api.get<ApiResponse>(`/tabelas/${tipo}`),
   calculate: (tipo: string, data: Record<string, unknown>) => api.post<ApiResponse<TestResult>>(`/tabelas/${tipo}/calculate`, data),
+  getSugestoes: (tipo: string, pacienteData: any) => api.post<ApiResponse>(`/tabelas/sugestoes/${tipo}`, pacienteData),
 };
 
 export const estoqueService = {
@@ -109,6 +134,47 @@ export const relatoriosService = {
   generate: (data: Record<string, unknown>) => api.post<ApiResponse>('/relatorios/generate', data),
   get: (id: string) => api.get<ApiResponse>(`/relatorios/${id}`),
   list: (params?: Record<string, unknown>) => api.get<ApiResponse>('/relatorios', { params }),
+};
+
+export const agendamentosService = {
+  list: (params?: Record<string, unknown>) => api.get<ApiResponse>('/agendamentos', { params }),
+  get: (id: string) => api.get<ApiResponse>(`/agendamentos/${id}`),
+  create: (data: any) => api.post<ApiResponse>('/agendamentos', data),
+  update: (id: string, data: any) => api.put<ApiResponse>(`/agendamentos/${id}`, data),
+  delete: (id: string) => api.delete<ApiResponse>(`/agendamentos/${id}`),
+  converterPaciente: (id: string, dados_adicionais?: any) => 
+    api.post<ApiResponse>(`/agendamentos/${id}/converter-paciente`, { dados_adicionais }),
+  importarLote: (data: any) => api.post<ApiResponse>('/agendamentos/importar-lote', data),
+};
+
+export const assinaturaService = {
+  validarCertificado: (certificado_base64: string) => 
+    api.post('/assinatura/validar-certificado', { certificado_base64 }),
+  assinarDocumento: (hash_documento: string, certificado_base64: string, senha?: string) =>
+    api.post('/assinatura/assinar-documento', { hash_documento, certificado_base64, senha }),
+};
+
+export const assinaturaDigitalService = {
+  listarCertificados: () => 
+    api.get('/assinatura-digital/certificados'),
+  validarCertificado: (certificadoId: string) => 
+    api.post('/assinatura-digital/validar-certificado', { certificadoId }),
+  assinarDocumento: (certificadoId: string, documentoHash: string, tipoDocumento: string, dadosDocumento: any) =>
+    api.post('/assinatura-digital/assinar-documento', { 
+      certificadoId, 
+      documentoHash, 
+      tipoDocumento, 
+      dadosDocumento 
+    }),
+  verificarAssinatura: (assinaturaId: string, documentoHash: string) =>
+    api.post('/assinatura-digital/verificar-assinatura', { assinaturaId, documentoHash }),
+  gerarPdfAssinado: (tipoDocumento: string, dadosDocumento: any, assinaturaId: string, certificadoId: string) =>
+    api.post('/assinatura-digital/gerar-pdf-assinado', { 
+      tipoDocumento, 
+      dadosDocumento, 
+      assinaturaId, 
+      certificadoId 
+    }),
 };
 
 export default api;

@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'next/navigation';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { 
   Brain, 
   Eye, 
@@ -18,6 +18,7 @@ import toast from 'react-hot-toast';
 import { tabelasService, pacientesService, avaliacoesService } from '@/services/api';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import Layout from '@/components/Layout';
+import { useAuth } from '@/contexts/AuthContext';
 import { Patient, TestResult } from '@/types';
 
 interface Test {
@@ -37,7 +38,13 @@ interface Test {
 }
 
 export default function TestesPage() {
+  const { user } = useAuth();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  
+  // Verificar se o usuário é administrador
+  const isAdmin = user?.perfil === 'administrador';
   
   // Verificar se veio de uma página de paciente ou avaliação
   const pacienteId = searchParams.get('paciente_id');
@@ -55,7 +62,7 @@ export default function TestesPage() {
   const [patientData, setPatientData] = useState({
     cpf: '',
     nome: '',
-    numero_laudo: numeroLaudo || '',
+    numero_laudo: '',
     data_nascimento: '',
     contexto: '',
     tipo_transito: '',
@@ -67,6 +74,10 @@ export default function TestesPage() {
   const [searchingPatient, setSearchingPatient] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [descontarEstoque, setDescontarEstoque] = useState(true); // Por padrão, desconta do estoque
+  const [avaliadoFixado, setAvaliadoFixado] = useState(false); // Novo estado para travar o avaliado
+  const [showTabelaModal, setShowTabelaModal] = useState(false);
+  const [tabelaSugestoes, setTabelaSugestoes] = useState<any>(null);
+  const [tabelaSelecionada, setTabelaSelecionada] = useState<number | null>(null);
 
   // Estados específicos do MIG
   const QUESTIONS_COUNT = 28;
@@ -700,12 +711,16 @@ export default function TestesPage() {
     setTestData({});
     setResults(null);
     setSelectedTable(null);
-    // NÃO resetar analysisType e patientData se veio vinculado via URL
-    if (!pacienteId && !avaliacaoId) {
+    
+    // NÃO resetar analysisType e patientData se:
+    // 1. Veio vinculado via URL (pacienteId ou avaliacaoId)
+    // 2. OU se o avaliado está fixado
+    if (!pacienteId && !avaliacaoId && !avaliadoFixado) {
       setAnalysisType('linked'); // Sempre vinculado por padrão
       setPatientData({ cpf: '', nome: '', numero_laudo: '', data_nascimento: '', contexto: '', tipo_transito: '', escolaridade: '', telefone: '', email: '' });
       setFoundPatient(null);
     }
+    
     setSearchingPatient(false);
     setMigAnswers(Array(MIG_TOTAL_POSITIONS).fill(''));
     setAutoCalcFromGabarito(true);
@@ -715,24 +730,44 @@ export default function TestesPage() {
   useEffect(() => {
     const loadLinkedData = async () => {
       try {
+        console.log('🔍 useEffect loadLinkedData - pacienteId:', pacienteId, 'avaliacaoId:', avaliacaoId);
+        
         if (pacienteId) {
           // Carregar dados do paciente pelo ID
+          console.log('📡 Carregando paciente ID:', pacienteId);
           setSearchingPatient(true);
           const response = await pacientesService.get(pacienteId);
-          const paciente = (response as any).data.paciente;
-          if (paciente) {
+          console.log('📦 Resposta GET /pacientes/' + pacienteId + ':', response);
+          console.log('📦 response.data:', (response as any).data);
+          console.log('📦 response.data.data:', (response as any).data?.data);
+          
+          // A estrutura é { data: { data: { ...paciente... } } }
+          const paciente = (response as any).data?.data || (response as any).data;
+          console.log('👤 Paciente extraído:', paciente);
+          
+          if (paciente && paciente.id) {
             setFoundPatient(paciente);
-            setPatientData({
-              cpf: paciente.cpf,
-              nome: paciente.nome,
-              numero_laudo: numeroLaudo || paciente.numero_laudo || `LAU-${new Date().getFullYear()}-${String(paciente.id).padStart(4, '0')}`,
-              data_nascimento: paciente.data_nascimento,
-              contexto: paciente.contexto,
-              tipo_transito: paciente.tipo_transito,
-              escolaridade: paciente.escolaridade,
-              telefone: paciente.telefone,
-              email: paciente.email
-            });
+            const laudoFinal = numeroLaudo || paciente.numero_laudo || `LAU-${new Date().getFullYear()}-${String(paciente.id).padStart(4, '0')}`;
+            
+            const dadosCarregados = {
+              cpf: paciente.cpf || '',
+              nome: paciente.nome || '',
+              numero_laudo: laudoFinal,
+              data_nascimento: paciente.data_nascimento || '',
+              contexto: paciente.contexto || '',
+              tipo_transito: paciente.tipo_transito || '',
+              escolaridade: paciente.escolaridade || '',
+              telefone: paciente.telefone || '',
+              email: paciente.email || ''
+            };
+            console.log('💾 Setando patientData:', dadosCarregados);
+            console.log('📋 Laudo final:', laudoFinal);
+            setPatientData(dadosCarregados);
+            setAvaliadoFixado(true); // Fixar o avaliado quando vem da URL
+            console.log('🔒 Avaliado FIXADO!');
+            toast.success(`✅ Avaliado selecionado: ${paciente.nome}`);
+          } else {
+            console.error('❌ Paciente não tem ID válido:', paciente);
           }
           setSearchingPatient(false);
         } else if (avaliacaoId) {
@@ -795,17 +830,26 @@ export default function TestesPage() {
   };
 
   const handlePatientDataChange = async (field: string, value: string) => {
+    // Se o avaliado está fixado, não permite edição
+    if (avaliadoFixado) {
+      toast('⚠️ Avaliado fixado! Click em "Limpar Avaliado" para trocar.', {
+        icon: '⚠️',
+        duration: 2000
+      });
+      return;
+    }
+
     const newPatientData = {
       ...patientData,
       [field]: value
     };
     setPatientData(newPatientData);
     
-    if (value.trim() && (newPatientData.cpf || newPatientData.nome || newPatientData.numero_laudo)) {
+    // Só busca se tiver valor, NÃO limpa foundPatient se estiver digitando
+    if (value.trim()) {
       await searchPatient(newPatientData);
-    } else {
-      setFoundPatient(null);
     }
+    // Removido o else que limpava setFoundPatient(null)
   };
 
   const searchPatientByCPF = async () => {
@@ -815,10 +859,15 @@ export default function TestesPage() {
   };
 
   // Função para salvar o teste
-  const handleSaveTest = async () => {
+  const handleSaveTest = async (tabelaIdManual?: number) => {
     if (!selectedTest) {
       toast.error('Nenhum teste selecionado');
       return;
+    }
+    
+    // Fechar modal de seleção de tabela se estiver aberto
+    if (showTabelaModal) {
+      setShowTabelaModal(false);
     }
 
     // Se for anônimo, avisar que não será salvo
@@ -899,20 +948,92 @@ export default function TestesPage() {
       // Adicionar flag de desconto de estoque
       dataToSend.descontarEstoque = analysisType === 'linked' && descontarEstoque;
       
+      // Adicionar tabela_id se foi selecionada manualmente
+      if (tabelaIdManual) {
+        dataToSend.tabela_id = tabelaIdManual;
+      }
+      
       // Enviar para calcular e salvar
       const response = await tabelasService.calculate(selectedTest.id, dataToSend);
       const resultado = response.data.resultado || response.data || {};
+      const tabelaUsada = response.data.tabela_usada;
+      const tabelaId = response.data.tabela_id;
+      const avisos = response.data.avisos || [];
       
-      setResults(resultado as TestResult);
+      // Mostrar avisos se houver
+      if (Array.isArray(avisos) && avisos.length > 0) {
+        avisos.forEach((aviso: any) => {
+          if (aviso.tipo === 'warning') {
+            toast(aviso.mensagem, { icon: '⚠️', duration: 5000 });
+          } else {
+            toast(aviso.mensagem, { icon: 'ℹ️', duration: 4000 });
+          }
+        });
+      }
       
-      if (analysisType === 'linked' && (resultado as any).salvo) {
-        const estoqueMsg = descontarEstoque ? ' (estoque descontado)' : ' (sem desconto de estoque)';
-        toast.success('✅ Teste salvo com sucesso na avaliação!' + estoqueMsg);
-      } else if (analysisType === 'anonymous') {
-        toast.success('✅ Teste calculado (não vinculado ao paciente)');
+      // Adicionar informações da tabela ao resultado
+      const resultadoCompleto = {
+        ...resultado,
+        tabela_usada: tabelaUsada,
+        tabela_id: tabelaId
+      };
+      
+      setResults(resultadoCompleto as TestResult);
+      
+      if ((analysisType === 'linked' || analysisType === 'anonymous') && (resultado as any).salvo) {
+        if (analysisType === 'anonymous') {
+          // Avaliação anônima salva
+          const numeroLaudo = (resultado as any).numero_laudo || 'N/A';
+          toast.success(`🕶️ Teste salvo de forma anônima! Laudo: ${numeroLaudo}`, {
+            duration: 4000,
+            icon: '🔒'
+          });
+          toast('Apenas administradores podem acessar esta avaliação', {
+            duration: 3000,
+            icon: 'ℹ️'
+          });
+        } else {
+          // Avaliação vinculada salva
+          const estoqueMsg = descontarEstoque ? ' (estoque descontado)' : ' (sem desconto de estoque)';
+          toast.success('✅ Teste salvo com sucesso na avaliação!' + estoqueMsg);
+          
+          // Verificar se este é o último teste da lista pré-selecionada
+          if (testesPreSelecionados.length > 0) {
+            const currentTestIndex = tests.findIndex(t => t.id === selectedTest.id);
+            const isLastTest = currentTestIndex === tests.length - 1;
+            
+            if (isLastTest) {
+              // É o último teste, redirecionar para pacientes após 2 segundos
+              toast.success('🎉 Todos os testes foram concluídos! Redirecionando...', { duration: 2000 });
+              setTimeout(() => {
+                router.push(`/pacientes`);
+              }, 2000);
+            } else {
+              // Não é o último teste, selecionar o próximo automaticamente
+              const nextTest = tests[currentTestIndex + 1];
+              toast.success(`➡️ Próximo teste: ${nextTest.nome}`, { duration: 2000 });
+              setTimeout(() => {
+                handleTestSelect(nextTest);
+              }, 1500);
+            }
+          }
+        }
       } else {
         toast.success('✅ Teste calculado com sucesso!');
       }
+      
+      // Atualizar cache das consultas relacionadas - FORÇAR ATUALIZAÇÃO COMPLETA
+      await queryClient.invalidateQueries();
+      
+      // Aguardar um pouco para garantir que a invalidação seja processada
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Forçar refetch de todas as queries relacionadas
+      await queryClient.refetchQueries({ queryKey: ['pacientes'] });
+      await queryClient.refetchQueries({ queryKey: ['avaliacoes-paciente'] });
+      await queryClient.refetchQueries({ queryKey: ['avaliacoes'] });
+      await queryClient.refetchQueries({ queryKey: ['pacientes-count'] });
+      await queryClient.refetchQueries({ queryKey: ['avaliacoes-count'] });
       
     } catch (error: any) {
       console.error('Erro ao salvar teste:', error);
@@ -923,9 +1044,19 @@ export default function TestesPage() {
   };
 
   const searchPatient = async (data: any) => {
+    // Verificar se completou os critérios mínimos ANTES de buscar
+    const cpfCompleto = data.cpf && data.cpf.replace(/\D/g, '').length >= 11;
+    const nomeCompleto = data.nome && data.nome.length >= 5;
+    const laudoCompleto = data.numero_laudo && data.numero_laudo.length >= 4;
+    
+    // Se não completou nenhum critério, não busca e não mostra erro
+    if (!cpfCompleto && !nomeCompleto && !laudoCompleto) {
+      return;
+    }
+
     setSearchingPatient(true);
     try {
-      if (data.cpf && data.cpf.length >= 11) {
+      if (cpfCompleto) {
         const formattedCPF = formatCPF(data.cpf);
         const response = await pacientesService.list({ search: formattedCPF, limit: 1 });
         const pacientes = (response as any).data.data.pacientes || [];
@@ -946,11 +1077,13 @@ export default function TestesPage() {
             ...prev,
             escolaridade: pacientes[0].escolaridade || ''
           }));
+          setAvaliadoFixado(true); // Fixar o avaliado
+          toast.success(`✅ Avaliado selecionado: ${pacientes[0].nome}`);
           return;
         }
       }
       
-      if (data.nome && data.nome.length >= 3) {
+      if (nomeCompleto) {
         const response = await pacientesService.list({ search: data.nome, limit: 1 });
         const pacientes = (response as any).data.data.pacientes || [];
         if (pacientes.length > 0) {
@@ -970,14 +1103,54 @@ export default function TestesPage() {
             ...prev,
             escolaridade: pacientes[0].escolaridade || ''
           }));
+          setAvaliadoFixado(true); // Fixar o avaliado
+          toast.success(`✅ Avaliado selecionado: ${pacientes[0].nome}`);
           return;
         }
       }
       
-      setFoundPatient(null);
+      // Buscar por número de laudo
+      if (laudoCompleto) {
+        // Tentar buscar por número de laudo (pode estar no formato 0013 ou LAU-2025-0013)
+        const laudoCompletoStr = data.numero_laudo.startsWith('LAU-') 
+          ? data.numero_laudo 
+          : `LAU-${new Date().getFullYear()}-${String(data.numero_laudo).padStart(4, '0')}`;
+        
+        const response = await pacientesService.list({ search: laudoCompletoStr, limit: 10 });
+        const pacientes = (response as any).data.data.pacientes || [];
+        if (pacientes.length > 0) {
+          setFoundPatient(pacientes[0]);
+          setPatientData({
+            cpf: pacientes[0].cpf,
+            nome: pacientes[0].nome,
+            numero_laudo: pacientes[0].numero_laudo || laudoCompletoStr,
+            data_nascimento: pacientes[0].data_nascimento,
+            contexto: pacientes[0].contexto,
+            tipo_transito: pacientes[0].tipo_transito,
+            escolaridade: pacientes[0].escolaridade,
+            telefone: pacientes[0].telefone,
+            email: pacientes[0].email
+          });
+          setTestData(prev => ({
+            ...prev,
+            escolaridade: pacientes[0].escolaridade || ''
+          }));
+          setAvaliadoFixado(true); // Fixar o avaliado
+          toast.success(`✅ Avaliado selecionado: ${pacientes[0].nome}`);
+          return;
+        }
+      }
+      
+      // Só mostra "não encontrado" se completou os critérios mínimos
+      if (cpfCompleto || nomeCompleto || laudoCompleto) {
+        toast('ℹ️ Avaliado não encontrado', {
+          icon: 'ℹ️',
+          duration: 3000
+        });
+      }
     } catch (error) {
       console.error('Erro ao buscar paciente:', error);
-      setFoundPatient(null);
+      toast.error('Erro ao buscar avaliado');
     } finally {
       setSearchingPatient(false);
     }
@@ -987,10 +1160,54 @@ export default function TestesPage() {
     return cpf.replace(/\D/g, '').replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
   };
 
+  const limparAvaliado = () => {
+    setFoundPatient(null);
+    setAvaliadoFixado(false);
+    setPatientData({
+      cpf: '',
+      nome: '',
+      numero_laudo: '',
+      data_nascimento: '',
+      contexto: '',
+      tipo_transito: '',
+      escolaridade: '',
+      telefone: '',
+      email: ''
+    });
+    toast('🔄 Avaliado liberado. Pode selecionar outro.', {
+      icon: '🔄',
+      duration: 2000
+    });
+  };
+
   const handleCalculate = async () => {
-    // Calcular e salvar automaticamente se for vinculado
-    // Esta função agora é um alias para handleSaveTest
-    await handleSaveTest();
+    // Se for análise vinculada e tiver paciente, SEMPRE mostrar modal de seleção de tabelas
+    if (analysisType === 'linked' && foundPatient && selectedTest) {
+      try {
+        console.log('🔍 Buscando sugestões de tabelas para:', foundPatient.nome);
+        const response = await tabelasService.getSugestoes(selectedTest.id, foundPatient);
+        const sugestoes = (response as any).data?.data;
+        
+        console.log('📊 Sugestões recebidas:', sugestoes);
+        
+        if (sugestoes && sugestoes.tabelaId) {
+          // SEMPRE mostrar modal para o usuário poder escolher
+          setTabelaSugestoes(sugestoes);
+          setTabelaSelecionada(sugestoes.tabelaId); // Pré-selecionar a recomendada
+          setShowTabelaModal(true);
+        } else {
+          console.warn('⚠️ Nenhuma sugestão retornada, calculando com tabela padrão');
+          await handleSaveTest();
+        }
+      } catch (error) {
+        console.error('Erro ao buscar sugestões:', error);
+        // Se falhar, calcular normalmente
+        await handleSaveTest();
+      }
+    } else {
+      // Não vinculado ou sem paciente - calcular direto
+      await handleSaveTest();
+    }
   };
 
   // Buscar tabelas normativas
@@ -1109,7 +1326,7 @@ export default function TestesPage() {
     
     const { contexto, tipo_transito, escolaridade } = foundPatient;
     
-    console.log('🔍 Auto-selecionando tabelas:', { contexto, tipo_transito, escolaridade });
+    // Auto-selecionar tabelas com base no contexto do paciente
     
     // Para cada teste, tentar encontrar a tabela mais apropriada
     if (contexto === 'Trânsito') {
@@ -1306,26 +1523,48 @@ export default function TestesPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hide-on-print">
           <h3 className="text-lg font-semibold text-gray-800 mb-4">Modo de Avaliação</h3>
           
-          <div className="flex gap-4 mb-6">
+          <div className={`grid ${isAdmin ? 'grid-cols-3' : 'grid-cols-2'} gap-4 mb-6`}>
             <button
-              onClick={() => setAnalysisType('anonymous')}
+              onClick={() => setAnalysisType('unlinked')}
               className={`flex-1 p-4 border-2 rounded-lg transition-all ${
-                analysisType === 'anonymous'
+                analysisType === 'unlinked'
                   ? 'border-blue-500 bg-blue-50'
                   : 'border-gray-300 hover:border-gray-400'
               }`}
             >
               <div className="text-center">
-                <div className="text-2xl mb-2">🔓</div>
-                <h4 className="font-semibold text-gray-800">Avaliação Anônima</h4>
+                <div className="text-2xl mb-2">🔢</div>
+                <h4 className="font-semibold text-gray-800">Não-Vinculada</h4>
                 <p className="text-sm text-gray-600 mt-1">
-                  Teste sem vincular a paciente ou laudo
+                  Apenas cálculo rápido
                 </p>
-                <p className="text-xs text-red-600 mt-1 font-medium">
-                  ⚠️ Não será guardado na base de dados
+                <p className="text-xs text-gray-500 mt-1">
+                  ❌ Não salva
                 </p>
               </div>
             </button>
+
+            {isAdmin && (
+              <button
+                onClick={() => setAnalysisType('anonymous')}
+                className={`flex-1 p-4 border-2 rounded-lg transition-all ${
+                  analysisType === 'anonymous'
+                    ? 'border-yellow-500 bg-yellow-50'
+                    : 'border-gray-300 hover:border-gray-400'
+                }`}
+              >
+                <div className="text-center">
+                  <div className="text-2xl mb-2">🕶️</div>
+                  <h4 className="font-semibold text-gray-800">Anônima</h4>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Salva sem vincular
+                  </p>
+                  <p className="text-xs text-yellow-700 mt-1 font-medium">
+                    🔒 Apenas admin acessa
+                  </p>
+                </div>
+              </button>
+            )}
             
             <button
               onClick={() => setAnalysisType('linked')}
@@ -1337,12 +1576,12 @@ export default function TestesPage() {
             >
               <div className="text-center">
                 <div className="text-2xl mb-2">🔗</div>
-                <h4 className="font-semibold text-gray-800">Avaliação Vinculada</h4>
+                <h4 className="font-semibold text-gray-800">Vinculada</h4>
                 <p className="text-sm text-gray-600 mt-1">
-                  Vincular a paciente e número de laudo
+                  Vincular a avaliado
                 </p>
                 <p className="text-xs text-green-600 mt-1 font-medium">
-                  ✅ Salvamento automático na base de dados
+                  ✅ Salva e vincula
                 </p>
               </div>
             </button>
@@ -1422,47 +1661,117 @@ export default function TestesPage() {
           {/* Campos para Avaliação Vinculada */}
           {analysisType === 'linked' && (
             <div className="border-t border-gray-200 pt-6">
-              <h4 className="font-semibold text-gray-800 mb-4">Dados da Avaliação</h4>
+              <div className="flex justify-between items-center mb-4">
+                <h4 className="font-semibold text-gray-800">Dados da Avaliação</h4>
+                {avaliadoFixado && (
+                  <button
+                    onClick={limparAvaliado}
+                    className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors text-sm font-medium"
+                    title="Limpar avaliado e selecionar outro"
+                  >
+                    🔄 Nova Avaliação
+                  </button>
+                )}
+              </div>
+              
+              {/* Banner de Avaliado Fixado */}
+              {avaliadoFixado && foundPatient && (
+                <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-md mb-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">✅</span>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-green-800">
+                        Avaliado Selecionado: <strong>{foundPatient.nome}</strong>
+                      </p>
+                      <p className="text-xs text-green-700 mt-1">
+                        CPF: {foundPatient.cpf} | Laudo: {patientData.numero_laudo}
+                      </p>
+                      <p className="text-xs text-green-600 mt-1">
+                        ℹ️ Agora você pode aplicar quantos testes quiser para este avaliado. Click em &quot;Nova Avaliação&quot; para trocar.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    CPF do Paciente *
+                    CPF do Avaliado *
                   </label>
-                  <input
-                    type="text"
-                    value={patientData.cpf}
-                    onChange={(e) => setPatientData(prev => ({ ...prev, cpf: e.target.value }))}
-                    onBlur={searchPatientByCPF}
-                    placeholder="000.000.000-00"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {searchingPatient && <p className="text-sm text-blue-600 mt-1">Buscando paciente...</p>}
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={patientData.cpf || ''}
+                      onChange={(e) => handlePatientDataChange('cpf', e.target.value)}
+                      placeholder="000.000.000-00"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                        avaliadoFixado 
+                          ? 'bg-gray-100 border-gray-300 cursor-not-allowed text-gray-700' 
+                          : 'border-gray-300 focus:ring-blue-500'
+                      }`}
+                      readOnly={avaliadoFixado}
+                    />
+                    {foundPatient && !avaliadoFixado && (
+                      <button
+                        onClick={() => {
+                          setFoundPatient(null);
+                          setPatientData({
+                            cpf: '',
+                            nome: '',
+                            numero_laudo: '',
+                            data_nascimento: '',
+                            contexto: '',
+                            tipo_transito: '',
+                            escolaridade: '',
+                            telefone: '',
+                            email: ''
+                          });
+                        }}
+                        className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        title="Limpar busca"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  {searchingPatient && <p className="text-sm text-blue-600 mt-1">🔍 Buscando avaliado...</p>}
+                  {foundPatient && <p className="text-sm text-green-600 mt-1">✅ Avaliado: {foundPatient.nome}</p>}
                 </div>
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Nome do Paciente *
+                    Nome do Avaliado *
                   </label>
                   <input
                     type="text"
-                    value={patientData.nome}
-                    onChange={(e) => setPatientData(prev => ({ ...prev, nome: e.target.value }))}
+                    value={patientData.nome || ''}
+                    onChange={(e) => handlePatientDataChange('nome', e.target.value)}
                     placeholder="Nome completo"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    readOnly={!!foundPatient}
+                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                      avaliadoFixado 
+                        ? 'bg-gray-100 border-gray-300 cursor-not-allowed text-gray-700' 
+                        : 'border-gray-300 focus:ring-blue-500'
+                    }`}
+                    readOnly={avaliadoFixado}
                   />
                 </div>
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Número do Laudo *
+                    Número do Laudo * <span className="text-xs text-gray-500">(exemplo: 0013 ou LAU-2025-0013)</span>
                   </label>
                   <input
                     type="text"
-                    value={patientData.numero_laudo}
-                    onChange={(e) => setPatientData(prev => ({ ...prev, numero_laudo: e.target.value }))}
-                    placeholder="LAU-2025-0001"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={patientData.numero_laudo || ''}
+                    onChange={(e) => handlePatientDataChange('numero_laudo', e.target.value)}
+                    placeholder="0013 ou LAU-2025-0013"
+                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 ${
+                      avaliadoFixado 
+                        ? 'bg-gray-100 border-gray-300 cursor-not-allowed text-gray-700' 
+                        : 'border-gray-300 focus:ring-blue-500'
+                    }`}
+                    readOnly={avaliadoFixado}
                   />
                 </div>
               </div>
@@ -1470,7 +1779,7 @@ export default function TestesPage() {
               {foundPatient && (
                 <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-md">
                   <p className="text-sm text-green-700">
-                    ✅ Paciente encontrado: {foundPatient.nome} - CPF: {foundPatient.cpf}
+                    ✅ Avaliado encontrado: {foundPatient.nome} - CPF: {foundPatient.cpf}
                   </p>
                 </div>
               )}
@@ -1690,7 +1999,7 @@ export default function TestesPage() {
                   {/* Atenção Concentrada (Rota C) */}
                   <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                     <h4 className="text-lg font-semibold text-blue-800 mb-4 text-center">
-                      Atenção Concentrada
+                      Atenção Concentrada (C)
                     </h4>
                     <div className="space-y-3">
                       <div>
@@ -1741,7 +2050,7 @@ export default function TestesPage() {
                   {/* Atenção Alternada (Rota A) */}
                   <div className="bg-green-50 p-4 rounded-lg border border-green-200">
                     <h4 className="text-lg font-semibold text-green-800 mb-4 text-center">
-                      Atenção Alternada
+                      Atenção Alternada (A)
                     </h4>
                     <div className="space-y-3">
                       <div>
@@ -1792,7 +2101,7 @@ export default function TestesPage() {
                   {/* Atenção Dividida (Rota D) */}
                   <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
                     <h4 className="text-lg font-semibold text-purple-800 mb-4 text-center">
-                      Atenção Dividida
+                      Atenção Dividida (D)
                     </h4>
                     <div className="space-y-3">
                       <div>
@@ -3362,16 +3671,140 @@ export default function TestesPage() {
                   </div>
                 )}
 
+                {/* Resultados de ROTAS - Visualização especial */}
+                {selectedTest.id === 'rotas' && results && typeof results === 'object' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Atenção Concentrada (Rota C) */}
+                      {(results as any).c && (
+                        <div className="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-lg border-2 border-blue-300">
+                          <h5 className="font-bold text-blue-900 mb-3 text-center text-lg">
+                            Atenção Concentrada (C)
+                          </h5>
+                          <div className="space-y-2">
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">Acertos:</span>
+                              <span className="font-semibold text-green-700">{(results as any).c.acertos}</span>
+                            </div>
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">PB:</span>
+                              <span className="font-semibold text-indigo-700">{(results as any).c.pb}</span>
+                            </div>
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">Percentil:</span>
+                              <span className="font-semibold text-blue-700">{(results as any).c.percentil || '-'}</span>
+                            </div>
+                            <div className="bg-white p-2 rounded">
+                              <span className="text-xs text-gray-500">Classificação:</span>
+                              <p className="font-bold text-purple-700 mt-1">{(results as any).c.classificacao}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Atenção Alternada (Rota A) */}
+                      {(results as any).a && (
+                        <div className="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-lg border-2 border-green-300">
+                          <h5 className="font-bold text-green-900 mb-3 text-center text-lg">
+                            Atenção Alternada (A)
+                          </h5>
+                          <div className="space-y-2">
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">Acertos:</span>
+                              <span className="font-semibold text-green-700">{(results as any).a.acertos}</span>
+                            </div>
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">PB:</span>
+                              <span className="font-semibold text-indigo-700">{(results as any).a.pb}</span>
+                            </div>
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">Percentil:</span>
+                              <span className="font-semibold text-blue-700">{(results as any).a.percentil || '-'}</span>
+                            </div>
+                            <div className="bg-white p-2 rounded">
+                              <span className="text-xs text-gray-500">Classificação:</span>
+                              <p className="font-bold text-purple-700 mt-1">{(results as any).a.classificacao}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Atenção Dividida (Rota D) */}
+                      {(results as any).d && (
+                        <div className="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-lg border-2 border-purple-300">
+                          <h5 className="font-bold text-purple-900 mb-3 text-center text-lg">
+                            Atenção Dividida (D)
+                          </h5>
+                          <div className="space-y-2">
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">Acertos:</span>
+                              <span className="font-semibold text-green-700">{(results as any).d.acertos}</span>
+                            </div>
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">PB:</span>
+                              <span className="font-semibold text-indigo-700">{(results as any).d.pb}</span>
+                            </div>
+                            <div className="flex justify-between bg-white p-2 rounded">
+                              <span className="text-sm text-gray-600">Percentil:</span>
+                              <span className="font-semibold text-blue-700">{(results as any).d.percentil || '-'}</span>
+                            </div>
+                            <div className="bg-white p-2 rounded">
+                              <span className="text-xs text-gray-500">Classificação:</span>
+                              <p className="font-bold text-purple-700 mt-1">{(results as any).d.classificacao}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Resultado Geral (MGA) */}
+                    {(results as any).geral && (
+                      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 p-6 rounded-lg border-2 border-yellow-400">
+                        <h5 className="font-bold text-yellow-900 mb-4 text-center text-xl">
+                          📊 Resultado Geral (MGA - Medida Geral de Atenção)
+                        </h5>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="bg-white p-4 rounded-lg text-center">
+                            <span className="text-sm text-gray-600 block mb-2">MGA Total</span>
+                            <span className="text-2xl font-bold text-indigo-700">{(results as any).geral.mga}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-lg text-center">
+                            <span className="text-sm text-gray-600 block mb-2">Percentil</span>
+                            <span className="text-2xl font-bold text-blue-700">{(results as any).geral.percentil || '-'}</span>
+                          </div>
+                          <div className="bg-white p-4 rounded-lg text-center">
+                            <span className="text-sm text-gray-600 block mb-2">Classificação</span>
+                            <span className="text-xl font-bold text-purple-700">{(results as any).geral.classificacao}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Resultados genéricos para outros testes */}
-                {selectedTest.id !== 'memore' && selectedTest.id !== 'mig' && selectedTest.id !== 'r1' && selectedTest.id !== 'ac' && (
+                {selectedTest.id !== 'memore' && selectedTest.id !== 'mig' && selectedTest.id !== 'r1' && selectedTest.id !== 'ac' && selectedTest.id !== 'rotas' && (
                   <div className="bg-gray-50 rounded-lg p-6">
                     <div className="space-y-2">
-                      {Object.entries(results).map(([key, value]) => (
-                        <div key={key} className="flex justify-between">
-                          <span className="text-gray-600">{key}:</span>
-                          <span className="font-medium">{String(value)}</span>
-                        </div>
-                      ))}
+                      {Object.entries(results).map(([key, value]) => {
+                        // Pular campos técnicos
+                        if (['salvo', 'avaliacao_id', 'tabela_id', 'tabela_usada', 'sugestoes', 'avisos'].includes(key)) return null;
+                        
+                        // Converter objetos para JSON legível
+                        let displayValue = value;
+                        if (typeof value === 'object' && value !== null) {
+                          displayValue = JSON.stringify(value, null, 2);
+                        } else {
+                          displayValue = String(value);
+                        }
+                        
+                        return (
+                          <div key={key} className="flex justify-between">
+                            <span className="text-gray-600">{key}:</span>
+                            <span className="font-medium whitespace-pre-wrap">{displayValue}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -3380,13 +3813,20 @@ export default function TestesPage() {
 
             {/* Botão Guardar - Aparece para todos os testes */}
             <div className="mt-6 pt-6 border-t border-gray-200 hide-on-print">
-              <div className="flex items-center justify-between">
+              <div className="space-y-3">
                 <div className="text-sm text-gray-600">
                   {analysisType === 'linked' ? (
                     foundPatient ? (
-                      <span className="text-green-600">
-                        ✅ Teste vinculado a: {foundPatient.nome} - Laudo: {patientData.numero_laudo}
-                      </span>
+                      <div>
+                        <span className="text-green-600">
+                          ✅ Teste vinculado a: {foundPatient.nome} - Laudo: {patientData.numero_laudo}
+                        </span>
+                        {(results as any)?.tabela_usada && (
+                          <div className="mt-2 text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
+                            <span className="font-semibold">📋 Tabela Normativa:</span> {(results as any).tabela_id ? `${(results as any).tabela_id} - ` : ''}{(results as any).tabela_usada}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-yellow-600">
                         ⚠️ Preencha os dados do paciente acima para vincular
@@ -3399,20 +3839,34 @@ export default function TestesPage() {
                   )}
                 </div>
                 
-                <button
-                  onClick={handleSaveTest}
-                  disabled={isSaving || (analysisType === 'linked' && (!patientData.cpf || !patientData.nome || !patientData.numero_laudo))}
-                  className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Save className="w-5 h-5" />
-                  {isSaving ? 'Salvando...' : (analysisType === 'linked' ? 'Calcular e Guardar' : 'Calcular (Não Salva)')}
-                </button>
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => handleSaveTest()}
+                    disabled={isSaving || (analysisType === 'linked' && (!patientData.cpf || !patientData.nome || !patientData.numero_laudo))}
+                    className={`flex items-center gap-2 px-6 py-3 text-white rounded-lg transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed ${
+                      analysisType === 'anonymous' 
+                        ? 'bg-yellow-600 hover:bg-yellow-700' 
+                        : analysisType === 'linked'
+                        ? 'bg-green-600 hover:bg-green-700'
+                        : 'bg-blue-600 hover:bg-blue-700'
+                    }`}
+                  >
+                    <Save className="w-5 h-5" />
+                    {isSaving 
+                      ? 'Salvando...' 
+                      : analysisType === 'linked' 
+                      ? 'Calcular e Guardar'
+                      : analysisType === 'anonymous'
+                      ? '🕶️ Salvar Anônimo'
+                      : 'Calcular (Não Salva)'}
+                  </button>
+                </div>
               </div>
               
               {analysisType === 'linked' && !foundPatient && patientData.cpf && (
                 <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
                   <p className="text-sm text-yellow-700">
-                    ℹ️ Paciente não encontrado com esse CPF. O sistema criará uma nova avaliação ao guardar.
+                    ℹ️ Avaliado não encontrado com esse CPF. O sistema criará uma nova avaliação ao guardar.
                   </p>
                 </div>
               )}
@@ -3420,6 +3874,137 @@ export default function TestesPage() {
           </div>
         )}
       </div>
+
+      {/* Modal de Seleção de Tabela Normativa */}
+      {showTabelaModal && tabelaSugestoes && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">
+                ⚠️ Seleção de Tabela Normativa
+              </h2>
+              
+              {/* Avisos */}
+              {tabelaSugestoes.avisos && tabelaSugestoes.avisos.length > 0 && (
+                <div className="mb-6 space-y-2">
+                  {tabelaSugestoes.avisos.map((aviso: any, idx: number) => (
+                    <div key={idx} className={`p-4 rounded-lg border-l-4 ${
+                      aviso.tipo === 'warning' 
+                        ? 'bg-yellow-50 border-yellow-400' 
+                        : 'bg-blue-50 border-blue-400'
+                    }`}>
+                      <p className={`text-sm ${
+                        aviso.tipo === 'warning' ? 'text-yellow-800' : 'text-blue-800'
+                      }`}>
+                        {aviso.mensagem}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Tabela Recomendada */}
+              <div className="mb-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                  ✅ Tabela Recomendada
+                </h3>
+                <div className="bg-green-50 border-2 border-green-400 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-green-900">{tabelaSugestoes.tabelaNome}</h4>
+                      <p className="text-sm text-green-700 mt-1">
+                        Score: {tabelaSugestoes.score} pontos
+                      </p>
+                      {tabelaSugestoes.motivos && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {tabelaSugestoes.motivos.map((motivo: string, idx: number) => (
+                            <span key={idx} className="text-xs bg-green-200 text-green-800 px-2 py-1 rounded">
+                              {motivo}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="radio"
+                      name="tabela"
+                      value={tabelaSugestoes.tabelaId}
+                      checked={tabelaSelecionada === tabelaSugestoes.tabelaId}
+                      onChange={() => setTabelaSelecionada(tabelaSugestoes.tabelaId)}
+                      className="w-5 h-5 text-green-600"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              {/* Outras Sugestões */}
+              {tabelaSugestoes.sugestoes && tabelaSugestoes.sugestoes.length > 1 && (
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3">
+                    📋 Outras Opções
+                  </h3>
+                  <div className="space-y-2">
+                    {tabelaSugestoes.sugestoes.slice(1).map((sugestao: any, idx: number) => (
+                      <div key={idx} className="bg-gray-50 border border-gray-300 rounded-lg p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <h4 className="font-medium text-gray-900">{sugestao.nome}</h4>
+                            <p className="text-sm text-gray-600 mt-1">
+                              Score: {sugestao.score} pontos
+                            </p>
+                            {sugestao.motivos && sugestao.motivos.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {sugestao.motivos.map((motivo: string, mIdx: number) => (
+                                  <span key={mIdx} className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">
+                                    {motivo}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <input
+                            type="radio"
+                            name="tabela"
+                            value={sugestao.id}
+                            checked={tabelaSelecionada === sugestao.id}
+                            onChange={() => setTabelaSelecionada(sugestao.id)}
+                            className="w-5 h-5 text-blue-600"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Botões */}
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowTabelaModal(false);
+                    setTabelaSugestoes(null);
+                  }}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={async () => {
+                    if (tabelaSelecionada) {
+                      await handleSaveTest(tabelaSelecionada);
+                    } else {
+                      toast.error('Selecione uma tabela normativa');
+                    }
+                  }}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all"
+                >
+                  Calcular com Tabela Selecionada
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

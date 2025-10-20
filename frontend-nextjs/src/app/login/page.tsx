@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import { Eye, EyeOff, User, Mail, Lock } from 'lucide-react';
 import LoadingSpinner from '@/components/LoadingSpinner';
 
@@ -17,6 +18,7 @@ export default function LoginPage() {
   });
 
   const { login, register } = useAuth();
+  const { isDark } = useTheme();
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -50,16 +52,16 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className={`min-h-screen flex items-center justify-center ${isDark ? 'bg-dark-950' : 'bg-gray-50'} py-12 px-4 sm:px-6 lg:px-8`}>
       <div className="max-w-md w-full space-y-8">
         <div>
           <div className="mx-auto h-12 w-12 flex items-center justify-center rounded-full bg-blue-100">
             <User className="h-6 w-6 text-blue-600" />
           </div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
+          <h2 className={`mt-6 text-center text-3xl font-extrabold ${isDark ? 'text-white' : 'text-gray-900'}`}>
             {isLogin ? 'Faça login em sua conta' : 'Crie sua conta'}
           </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
+          <p className={`mt-2 text-center text-sm ${isDark ? 'text-dark-300' : 'text-gray-600'}`}>
             {isLogin ? (
               <>
                 Ou{' '}

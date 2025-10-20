@@ -7,6 +7,9 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 require('dotenv').config();
 
+// Configurar timezone para São Paulo (UTC-3)
+process.env.TZ = 'America/Sao_Paulo';
+
 const authRoutes = require('./routes/auth');
 const pacientesRoutes = require('./routes/pacientes');
 const avaliacoesRoutes = require('./routes/avaliacoes');
@@ -15,6 +18,9 @@ const estoqueRoutes = require('./routes/estoque');
 const relatoriosRoutes = require('./routes/relatorios');
 const usuariosRoutes = require('./routes/usuarios');
 const configuracoesRoutes = require('./routes/configuracoes');
+const agendamentosRoutes = require('./routes/agendamentos');
+const assinaturaRoutes = require('./routes/assinatura');
+const assinaturaDigitalRoutes = require('./routes/assinatura-digital');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -51,14 +57,25 @@ const corsOptions = {
     // Permitir requests sem origin (como mobile apps ou curl requests)
     if (!origin) return callback(null, true);
     
-    const allowedOrigins = process.env.NODE_ENV === 'production'
-      ? ['https://seudominio.com']
-      : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://127.0.0.1:3000'];
-    
-    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
-      callback(null, true);
+    if (process.env.NODE_ENV === 'production') {
+      // Em produção, apenas domínios específicos
+      const allowedOrigins = ['https://seudominio.com'];
+      if (allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
     } else {
-      callback(new Error('Not allowed by CORS'));
+      // Em desenvolvimento, permitir qualquer origem local (localhost ou rede local)
+      if (origin.startsWith('http://localhost') || 
+          origin.startsWith('http://127.0.0.1') ||
+          origin.startsWith('http://192.168.') ||
+          origin.startsWith('http://10.') ||
+          origin.startsWith('http://172.')) {
+        callback(null, true);
+      } else {
+        callback(null, true); // Permitir tudo em dev
+      }
     }
   },
   credentials: true,
@@ -92,6 +109,9 @@ app.use('/api/estoque', estoqueRoutes);
 app.use('/api/relatorios', relatoriosRoutes);
 app.use('/api/usuarios', usuariosRoutes);
 app.use('/api/configuracoes', configuracoesRoutes);
+app.use('/api/agendamentos', agendamentosRoutes);
+app.use('/api/assinatura', assinaturaRoutes);
+app.use('/api/assinatura-digital', assinaturaDigitalRoutes);
 
 // Rota raiz
 app.get('/', (req, res) => {
@@ -160,10 +180,11 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Iniciar servidor
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
   console.log(`📊 Ambiente: ${process.env.NODE_ENV || 'development'}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`🌐 Acessível na rede em: http://192.168.6.230:${PORT}`);
 });
 
 module.exports = app;

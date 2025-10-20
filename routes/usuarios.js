@@ -214,12 +214,102 @@ router.delete('/:id', authenticateToken, checkPermission('usuarios', 'excluir'),
   }
 });
 
+// Desativar usuário (soft delete)
+router.patch('/:id/desativar', authenticateToken, checkPermission('usuarios', 'excluir'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Não permitir desativar o próprio usuário
+    if (parseInt(id) === req.user.id) {
+      return res.status(400).json({ error: 'Você não pode desativar seu próprio usuário' });
+    }
+
+    const result = await query(`
+      UPDATE usuarios
+      SET ativo = false, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING id, nome, email, ativo
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    res.json({
+      success: true,
+      data: result.rows[0],
+      message: 'Usuário desativado com sucesso'
+    });
+  } catch (error) {
+    console.error('Erro ao desativar usuário:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Ativar usuário
+router.patch('/:id/ativar', authenticateToken, checkPermission('usuarios', 'excluir'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(`
+      UPDATE usuarios
+      SET ativo = true, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      RETURNING id, nome, email, ativo
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    res.json({
+      success: true,
+      data: result.rows[0],
+      message: 'Usuário ativado com sucesso'
+    });
+  } catch (error) {
+    console.error('Erro ao ativar usuário:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
+// Excluir usuário permanentemente (hard delete)
+router.delete('/:id/permanente', authenticateToken, checkPermission('usuarios', 'excluir'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Não permitir excluir o próprio usuário
+    if (parseInt(id) === req.user.id) {
+      return res.status(400).json({ error: 'Você não pode excluir seu próprio usuário' });
+    }
+
+    // Verificar se o usuário existe
+    const userCheck = await query('SELECT id, nome, email FROM usuarios WHERE id = $1', [id]);
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuário não encontrado' });
+    }
+
+    // Excluir permanentemente
+    await query('DELETE FROM usuarios WHERE id = $1', [id]);
+
+    res.json({
+      success: true,
+      data: userCheck.rows[0],
+      message: 'Usuário excluído permanentemente'
+    });
+  } catch (error) {
+    console.error('Erro ao excluir usuário:', error);
+    res.status(500).json({ error: 'Erro interno do servidor' });
+  }
+});
+
 // Listar perfis disponíveis
 router.get('/perfis/disponiveis', authenticateToken, async (req, res) => {
   try {
     const perfis = [
       { id: 'administrador', nome: 'Administrador', descricao: 'Acesso total ao sistema' },
       { id: 'psicologo', nome: 'Psicólogo', descricao: 'Acesso a pacientes, avaliações e testes' },
+      { id: 'psicologo_externo', nome: 'Psicólogo Externo', descricao: 'Acesso a testes sem descontar estoque da clínica' },
       { id: 'recepcionista', nome: 'Recepcionista', descricao: 'Acesso a pacientes e agendamentos' },
       { id: 'estagiario', nome: 'Estagiário', descricao: 'Acesso somente leitura' }
     ];
@@ -297,7 +387,7 @@ router.put('/perfil/me', authenticateToken, async (req, res) => {
     }
     if (perfil) {
       // Validar perfil
-      const validPerfis = ['administrador', 'psicologo', 'recepcionista', 'estagiario'];
+      const validPerfis = ['administrador', 'psicologo', 'psicologo_externo', 'recepcionista', 'estagiario'];
       if (!validPerfis.includes(perfil)) {
         return res.status(400).json({ error: 'Tipo de usuário inválido' });
       }

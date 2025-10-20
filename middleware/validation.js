@@ -16,15 +16,15 @@ const loginSchema = Joi.object({
 // Validação de paciente
 const pacienteSchema = Joi.object({
   nome: Joi.string().min(2).max(255).required(),
-  cpf: Joi.string().pattern(/^\d{3}\.\d{3}\.\d{3}-\d{2}$/).required(),
+  cpf: Joi.string().pattern(/^(\d{3}\.?\d{3}\.?\d{3}-?\d{2}|\d{11})$/).required(),
   data_nascimento: Joi.alternatives().try(
     Joi.date(),
     Joi.string().isoDate()
   ).optional().allow('', null),
   numero_laudo: Joi.string().max(50).optional().allow('', null),
   contexto: Joi.string().valid('Clínico', 'Organizacional', 'Trânsito').optional().allow('', null),
-  tipo_transito: Joi.string().valid('1ª Habilitação', 'Renovação', 'Adição/Mudança de Categoria', 'Curso Escolar', 'Instrutor', 'Segunda via', 'Reincidente', 'EAR - Exerce Atividade Remunerada', 'Cassação', 'Reg. Estrangeiro').optional().allow('', null),
-  escolaridade: Joi.string().valid('E. Fundamental', 'E. Médio', 'E. Superior', 'Pós-Graduação', 'Não Escolarizado').required(),
+  tipo_transito: Joi.string().valid('1ª Habilitação', 'Primeira Habilitação', 'Renovação', 'Adição/Mudança de Categoria', 'Curso Escolar', 'Instrutor', 'Segunda via', 'Reincidente', 'EAR - Exerce Atividade Remunerada', 'Cassação', 'Reg. Estrangeiro').optional().allow('', null),
+  escolaridade: Joi.string().valid('E. Fundamental', 'E. Médio', 'E. Superior', 'Pós-Graduação', 'Não Escolarizado').optional().allow('', null),
   telefone: Joi.string().max(20).optional().allow('', null),
   email: Joi.string().email().optional().allow('', null),
   endereco: Joi.string().max(500).optional().allow('', null),

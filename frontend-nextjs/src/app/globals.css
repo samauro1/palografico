@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Configuração do modo escuro */
+.dark {
+  color-scheme: dark;
+}
+
 :root {
   --foreground-rgb: 0, 0, 0;
   --background-start-rgb: 214, 219, 220;
@@ -65,5 +70,61 @@ body {
   /* Hide page header and test selection on print */
   .print\:hidden {
     display: none !important;
+  }
+
+  /* Ocultar elementos que não devem aparecer no laudo impresso */
+  .no-print {
+    display: none !important;
+  }
+
+  /* Estilos para impressão de laudo */
+  .laudo-impressao {
+    background: white !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 40px !important;
+    max-width: 100% !important;
+  }
+
+  /* Garantir quebra de página adequada */
+  .laudo-impressao section {
+    page-break-inside: avoid;
+  }
+
+  /* Forçar cores em impressão */
+  .laudo-impressao * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Ocultar sidebar e header ao imprimir */
+  nav, header, .sidebar, [role="navigation"] {
+    display: none !important;
+  }
+
+  /* Garantir que o laudo ocupe toda a página */
+  body {
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Ocultar outros elementos da página */
+  .bg-gradient-to-r, .shadow-sm, .rounded-xl {
+    background: white !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+  }
+
+  /* Estilos para impressão de declaração */
+  .declaracao-impressao {
+    background: white !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 60px 40px !important;
+    max-width: 100% !important;
+  }
+
+  .declaracao-impressao p {
+    line-height: 2 !important;
   }
 }

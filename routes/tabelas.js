@@ -136,6 +136,26 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Obter sugestões de tabelas normativas para um paciente específico
+router.post('/sugestoes/:tipo', async (req, res) => {
+  try {
+    const { tipo } = req.params;
+    const pacienteData = req.body;
+    
+    const { selecionarTabelaNormativa } = require('../utils/tabelaNormativaSelector');
+    const selecao = await selecionarTabelaNormativa(tipo, pacienteData);
+    
+    res.json({
+      data: selecao
+    });
+  } catch (error) {
+    console.error('Erro ao buscar sugestões de tabelas:', error);
+    res.status(500).json({
+      error: 'Erro interno do servidor'
+    });
+  }
+});
+
 // Buscar tabela específica
 router.get('/:tipo', async (req, res) => {
   try {
@@ -266,11 +286,14 @@ router.post('/:tipo/calculate', async (req, res) => {
 
     // Buscar tabela normativa
     let tabelaId;
+    let tabelaNome;
+    let sugestoes = [];
+    let avisos = [];
     
-    // Se tabela_id foi fornecido no body, usar ele
+    // Se tabela_id foi fornecido no body, usar ele (seleção manual)
     if (dados.tabela_id) {
       const tabelaResult = await query(`
-        SELECT id FROM tabelas_normativas 
+        SELECT id, nome FROM tabelas_normativas 
         WHERE id = $1 AND tipo = $2 AND ativa = true
       `, [dados.tabela_id, tipo]);
       
@@ -281,20 +304,30 @@ router.post('/:tipo/calculate', async (req, res) => {
       }
       
       tabelaId = tabelaResult.rows[0].id;
+      tabelaNome = tabelaResult.rows[0].nome;
+      console.log('✅ Tabela selecionada manualmente:', tabelaNome);
     } else {
-      // Caso contrário, buscar a primeira tabela ativa do tipo
-      const tabelaResult = await query(`
-        SELECT id FROM tabelas_normativas 
-        WHERE tipo = $1 AND ativa = true
-      `, [tipo]);
-
-      if (tabelaResult.rows.length === 0) {
+      // Caso contrário, usar seleção inteligente baseada nos dados do paciente
+      const { selecionarTabelaNormativa } = require('../utils/tabelaNormativaSelector');
+      
+      const pacienteData = dados.patientData?.foundPatient || {};
+      const selecao = await selecionarTabelaNormativa(tipo, pacienteData);
+      
+      if (!selecao.tabelaId) {
         return res.status(404).json({
-          error: 'Tabela normativa não encontrada'
+          error: selecao.erro || 'Nenhuma tabela normativa adequada encontrada',
+          sugestoes: selecao.sugestoes || []
         });
       }
-
-      tabelaId = tabelaResult.rows[0].id;
+      
+      tabelaId = selecao.tabelaId;
+      tabelaNome = selecao.tabelaNome;
+      sugestoes = selecao.sugestoes || [];
+      avisos = selecao.avisos || [];
+      
+      console.log('✅ Tabela selecionada automaticamente:', tabelaNome);
+      console.log('   Score:', selecao.score);
+      console.log('   Motivos:', selecao.motivos?.join(', '));
     }
     let resultado = {};
 
@@ -306,7 +339,14 @@ router.post('/:tipo/calculate', async (req, res) => {
         resultado = await calcularBetaIII(tabelaId, dados);
         break;
       case 'bpa2':
-        resultado = await calcularBPA2(tabelaId, dados);
+        try {
+          console.log('🔵 Tentando calcular BPA-2 com tabelaId:', tabelaId);
+          resultado = await calcularBPA2(tabelaId, dados);
+          console.log('✅ BPA-2 calculado com sucesso:', resultado);
+        } catch (error) {
+          console.error('❌ Erro ao calcular BPA-2:', error);
+          throw new Error(`Erro no cálculo do BPA-2: ${error.message}`);
+        }
         break;
       case 'rotas':
         resultado = await calcularRotas(tabelaId, dados);
@@ -354,14 +394,18 @@ router.post('/:tipo/calculate', async (req, res) => {
         );
         
         console.log('📋 Avaliação encontrada/criada:', avaliacao);
+        console.log('📊 Tipo de teste:', tipo);
+        console.log('📊 Tabela Normativa ID:', tabelaId);
         
         // Salvar resultado específico do teste
-        console.log('📊 Resultado a ser salvo:', resultado);
+        console.log('📊 Resultado a ser salvo:', JSON.stringify(resultado).substring(0, 200));
         const descontarEstoque = dados.descontarEstoque !== false; // Por padrão true
-        console.log('📦 Flag descontarEstoque recebida do frontend:', dados.descontarEstoque);
-        console.log('📦 Flag descontarEstoque processada:', descontarEstoque);
+        console.log('📦 Flag descontarEstoque:', descontarEstoque);
         console.log('📦 Usuario ID:', req.user.id);
-        await salvarResultadoTeste(tipo, avaliacao.id, dados, resultado, descontarEstoque, req.user.id);
+        
+        console.log('🚀 Chamando salvarResultadoTeste...');
+        await salvarResultadoTeste(tipo, avaliacao.id, dados, resultado, descontarEstoque, req.user.id, tabelaId);
+        console.log('✅ salvarResultadoTeste concluído!');
         
         resultado.avaliacao_id = avaliacao.id;
         resultado.salvo = true;
@@ -370,12 +414,68 @@ router.post('/:tipo/calculate', async (req, res) => {
         console.error('❌ Erro ao salvar resultado vinculado:', error);
         // Continua retornando o resultado mesmo se não conseguir salvar
       }
+    } else if (dados.analysisType === 'anonymous') {
+      try {
+        console.log('🕶️ Salvando resultado anônimo...');
+        
+        // Criar avaliação anônima (sem paciente vinculado)
+        const avaliacao = await criarAvaliacaoAnonima(req.user.id, tipo);
+        
+        console.log('📋 Avaliação anônima criada:', avaliacao);
+        console.log('📊 Tipo de teste:', tipo);
+        console.log('📊 Tabela Normativa ID:', tabelaId);
+        
+        // Salvar resultado específico do teste
+        // Para avaliações anônimas, NUNCA descontar estoque
+        console.log('📊 Resultado a ser salvo:', JSON.stringify(resultado).substring(0, 200));
+        console.log('📦 Flag descontarEstoque: FALSE (avaliação anônima)');
+        console.log('📦 Usuario ID:', req.user.id);
+        
+        console.log('🚀 Chamando salvarResultadoTeste (anônimo)...');
+        await salvarResultadoTeste(tipo, avaliacao.id, dados, resultado, false, req.user.id, tabelaId);
+        console.log('✅ salvarResultadoTeste (anônimo) concluído!');
+        
+        resultado.avaliacao_id = avaliacao.id;
+        resultado.salvo = true;
+        resultado.anonima = true;
+        resultado.numero_laudo = avaliacao.numero_laudo;
+        console.log(`✅ Resultado anônimo do teste ${tipo} salvo na avaliação ${avaliacao.id}`);
+      } catch (error) {
+        console.error('❌ Erro ao salvar resultado anônimo:', error);
+        // Continua retornando o resultado mesmo se não conseguir salvar
+      }
+    } else if (dados.analysisType === 'unlinked') {
+      // Registrar log de cálculo não-vinculado (apenas para auditoria)
+      try {
+        console.log('📝 Registrando log de cálculo não-vinculado...');
+        
+        await query(`
+          INSERT INTO logs_calculos (usuario_id, tipo_teste, dados_entrada, resultado, tabela_normativa_id, ip_address)
+          VALUES ($1, $2, $3, $4, $5, $6)
+        `, [
+          req.user.id,
+          tipo,
+          JSON.stringify(dados),
+          JSON.stringify(resultado),
+          tabelaId,
+          req.ip || req.connection.remoteAddress
+        ]);
+        
+        console.log('✅ Log de cálculo não-vinculado registrado');
+      } catch (error) {
+        console.error('❌ Erro ao registrar log de cálculo:', error);
+        // Não bloqueia o retorno do resultado
+      }
     } else {
       console.log('⚠️ Não salvando - análise não vinculada ou dados incompletos');
     }
 
     res.json({
-      resultado
+      resultado,
+      tabela_usada: tabelaNome,
+      tabela_id: tabelaId,
+      sugestoes: sugestoes,
+      avisos: avisos
     });
   } catch (error) {
     console.error('Erro ao calcular resultado:', error);
@@ -386,33 +486,58 @@ router.post('/:tipo/calculate', async (req, res) => {
 });
 
 // Funções auxiliares para salvar resultados vinculados
+async function criarAvaliacaoAnonima(usuarioId, tipoTeste) {
+  // Criar avaliação anônima (sem paciente vinculado)
+  const laudo = `ANON-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;
+  const data = new Date().toISOString().split('T')[0];
+  
+  console.log('🕶️ Criando avaliação anônima:', { laudo, tipo_teste: tipoTeste });
+  
+  const novaAvaliacao = await query(`
+    INSERT INTO avaliacoes (paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, anonima)
+    VALUES (NULL, $1, $2, $3, 'Individual', 'Anônima', TRUE)
+    RETURNING id
+  `, [usuarioId, laudo, data]);
+  
+  console.log('✅ Avaliação anônima criada:', novaAvaliacao.rows[0]);
+  return novaAvaliacao.rows[0];
+}
+
 async function criarOuBuscarAvaliacao(paciente, usuarioId, dataAvaliacao, numeroLaudo) {
   // Usar a data fornecida ou a data atual como fallback
   const data = dataAvaliacao || new Date().toISOString().split('T')[0];
   
-  // Verificar se já existe uma avaliação para este paciente + laudo + data
-  // Um laudo pode ter múltiplas avaliações em datas diferentes
+  // MUDANÇA: Buscar avaliação apenas por paciente + laudo (IGNORAR data)
+  // Múltiplas aplicações em datas diferentes = MESMA avaliação
   const avaliacaoExistente = await query(`
-    SELECT id FROM avaliacoes 
-    WHERE paciente_id = $1 AND numero_laudo = $2 AND DATE(data_aplicacao) = $3
+    SELECT id, data_aplicacao FROM avaliacoes 
+    WHERE paciente_id = $1 AND numero_laudo = $2
     ORDER BY created_at DESC 
     LIMIT 1
-  `, [paciente.id, numeroLaudo, data]);
+  `, [paciente.id, numeroLaudo]);
   
   if (avaliacaoExistente.rows.length > 0) {
-    console.log('📋 Avaliação existente encontrada:', avaliacaoExistente.rows[0]);
+    console.log('📋 Avaliação existente encontrada (mesmo laudo):', avaliacaoExistente.rows[0]);
+    
+    // Atualizar a data da avaliação para a data mais recente
+    await query(`
+      UPDATE avaliacoes 
+      SET data_aplicacao = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+    `, [data, avaliacaoExistente.rows[0].id]);
+    
+    console.log('📅 Data da avaliação atualizada para:', data);
     return avaliacaoExistente.rows[0];
   }
   
   // Criar nova avaliação
-  // Agora o mesmo laudo pode ter múltiplas avaliações (sem constraint UNIQUE)
   const laudo = numeroLaudo || `LAU-${new Date().getFullYear()}-${String(paciente.id).padStart(4, '0')}-${String(Date.now()).slice(-4)}`;
   
   console.log('📝 Criando nova avaliação:', { paciente_id: paciente.id, numero_laudo: laudo, data });
   
   const novaAvaliacao = await query(`
-    INSERT INTO avaliacoes (paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao)
-    VALUES ($1, $2, $3, $4, 'Individual', 'Psicológica')
+    INSERT INTO avaliacoes (paciente_id, usuario_id, numero_laudo, data_aplicacao, aplicacao, tipo_habilitacao, anonima)
+    VALUES ($1, $2, $3, $4, 'Individual', 'Psicológica', FALSE)
     RETURNING id
   `, [paciente.id, usuarioId, laudo, data]);
   
@@ -420,7 +545,9 @@ async function criarOuBuscarAvaliacao(paciente, usuarioId, dataAvaliacao, numero
   return novaAvaliacao.rows[0];
 }
 
-async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descontarEstoque = true, usuarioId = null) {
+async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descontarEstoque = true, usuarioId = null, tabelaNormativaId = null) {
+  console.log('💾 salvarResultadoTeste - tabelaNormativaId:', tabelaNormativaId);
+  
   switch (tipo) {
     case 'mig':
       console.log('💾 Salvando MIG:', {
@@ -431,21 +558,28 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
         classificacao: resultado.classificacao
       });
       
+      // Deletar resultado anterior se existir (evitar duplicados)
+      await query('DELETE FROM resultados_mig WHERE avaliacao_id = $1', [avaliacaoId]);
+      
       await query(`
-        INSERT INTO resultados_mig (avaliacao_id, tipo_avaliacao, acertos, percentil, classificacao)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO resultados_mig (avaliacao_id, tipo_avaliacao, acertos, percentil, classificacao, tabela_normativa_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
       `, [
         avaliacaoId,
         'geral', // tipo_avaliacao obrigatório
         dados.acertos,
         resultado.percentil,
-        resultado.classificacao
+        resultado.classificacao,
+        tabelaNormativaId
       ]);
       break;
     case 'memore':
+      // Deletar resultado anterior se existir (evitar duplicados)
+      await query('DELETE FROM resultados_memore WHERE avaliacao_id = $1', [avaliacaoId]);
+      
       await query(`
-        INSERT INTO resultados_memore (avaliacao_id, vp, vn, fn, fp, resultado_final, percentil, classificacao)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO resultados_memore (avaliacao_id, vp, vn, fn, fp, resultado_final, percentil, classificacao, tabela_normativa_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `, [
         avaliacaoId,
         dados.vp,
@@ -454,7 +588,8 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
         dados.fp,
         resultado.resultado_final || 0,
         resultado.percentil,
-        resultado.classificacao
+        resultado.classificacao,
+        tabelaNormativaId
       ]);
       break;
     case 'ac':
@@ -468,9 +603,12 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
         classificacao: resultado.classificacao
       });
       
+      // Deletar resultado anterior se existir (evitar duplicados)
+      await query('DELETE FROM resultados_ac WHERE avaliacao_id = $1', [avaliacaoId]);
+      
       await query(`
-        INSERT INTO resultados_ac (avaliacao_id, acertos, erros, omissoes, pb, percentil, classificacao)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO resultados_ac (avaliacao_id, acertos, erros, omissoes, pb, percentil, classificacao, tabela_normativa_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, [
         avaliacaoId,
         dados.acertos,
@@ -478,7 +616,8 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
         dados.omissoes,
         resultado.pb,
         resultado.percentil,
-        resultado.classificacao
+        resultado.classificacao,
+        tabelaNormativaId
       ]);
       break;
     case 'beta-iii':
@@ -491,6 +630,9 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
         percentil: resultado.percentil,
         classificacao: resultado.classificacao
       });
+      
+      // Deletar resultado anterior se existir (evitar duplicados)
+      await query('DELETE FROM resultados_beta_iii WHERE avaliacao_id = $1', [avaliacaoId]);
       
       await query(`
         INSERT INTO resultados_beta_iii (avaliacao_id, acertos, erros, omissao, resultado_final, percentil, classificacao)
@@ -506,6 +648,9 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
       ]);
       break;
     case 'bpa2':
+      // Deletar resultados anteriores se existirem (evitar duplicados)
+      await query('DELETE FROM resultados_bpa2 WHERE avaliacao_id = $1', [avaliacaoId]);
+      
       await query(`
         INSERT INTO resultados_bpa2 (avaliacao_id, tipo_atencao, acertos, erros, omissoes, pontos, percentil, classificacao)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -563,6 +708,9 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
       ]);
       break;
     case 'palografico':
+      // Deletar resultado anterior se existir (evitar duplicados)
+      await query('DELETE FROM resultados_palografico WHERE avaliacao_id = $1', [avaliacaoId]);
+      
       await query(`
         INSERT INTO resultados_palografico (avaliacao_id, produtividade, nor, distancia_media, media_tamanho_palos, 
           impulsividade, media_distancia_linhas, media_margem_esquerda, media_margem_direita, 
@@ -586,24 +734,39 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
       ]);
       break;
     case 'rotas':
+      console.log('💾 Salvando ROTAS:', { avaliacaoId, resultado, tabelaNormativaId });
+      // Deletar resultados anteriores se existirem (evitar duplicados)
+      await query('DELETE FROM resultados_rotas WHERE avaliacao_id = $1', [avaliacaoId]);
+      
       // Salvar resultados para cada tipo de rota
-      for (const [tipoRota, dadosRota] of Object.entries(resultado)) {
-        if (tipoRota === 'geral') continue; // Pular o resultado geral
+      // O resultado para Rotas vem como { a: {...}, c: {...}, d: {...}, geral: {...} }
+      for (const tipoRotaKey of ['a', 'c', 'd']) { // Iterar pelas chaves esperadas
+        const dadosRota = resultado[tipoRotaKey];
+        if (!dadosRota) {
+          console.warn(`⚠️ Dados para Rota ${tipoRotaKey.toUpperCase()} não encontrados no resultado.`);
+          continue;
+        }
+
+        console.log(`   💾 Salvando Rota ${tipoRotaKey.toUpperCase()}:`, dadosRota);
         
         await query(`
-          INSERT INTO resultados_rotas (avaliacao_id, rota_tipo, acertos, erros, omissoes, pb, percentil, classificacao)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          INSERT INTO resultados_rotas (avaliacao_id, rota_tipo, acertos, erros, omissoes, pb, percentil, classificacao, tabela_normativa_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         `, [
           avaliacaoId,
-          tipoRota.toUpperCase(),
+          tipoRotaKey.toUpperCase(), // Usar a chave como tipo de rota
           dadosRota.acertos,
           dadosRota.erros,
           dadosRota.omissoes,
           dadosRota.pb,
           dadosRota.percentil,
-          dadosRota.classificacao
+          dadosRota.classificacao,
+          tabelaNormativaId
         ]);
+        
+        console.log(`   ✅ Rota ${tipoRotaKey.toUpperCase()} salva!`);
       }
+      console.log('✅ Todas as rotas salvas com sucesso!');
       break;
     case 'r1':
       console.log('💾 Salvando R-1:', {
@@ -613,14 +776,18 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
         classificacao: resultado.classificacao
       });
       
+      // Deletar resultado anterior se existir (evitar duplicados)
+      await query('DELETE FROM resultados_r1 WHERE avaliacao_id = $1', [avaliacaoId]);
+      
       await query(`
-        INSERT INTO resultados_r1 (avaliacao_id, acertos, percentil, classificacao)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO resultados_r1 (avaliacao_id, acertos, percentil, classificacao, tabela_normativa_id)
+        VALUES ($1, $2, $3, $4, $5)
       `, [
         avaliacaoId,
         dados.acertos,
         resultado.percentil,
-        resultado.classificacao
+        resultado.classificacao,
+        tabelaNormativaId
       ]);
       break;
     case 'mvt':
@@ -632,6 +799,9 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
         percentil: resultado.percentil,
         classificacao: resultado.classificacao
       });
+      
+      // Deletar resultado anterior se existir (evitar duplicados)
+      await query('DELETE FROM resultados_mvt WHERE avaliacao_id = $1', [avaliacaoId]);
       
       await query(`
         INSERT INTO resultados_mvt (avaliacao_id, acertos, erros, tempo, percentil, classificacao)
@@ -648,8 +818,21 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
     // Adicionar outros testes conforme necessário
   }
 
-  // Descontar estoque se habilitado
-  if (descontarEstoque && usuarioId) {
+  // Verificar se o usuário é psicólogo externo
+  let deveDescontarEstoque = descontarEstoque;
+  if (usuarioId) {
+    const usuarioResult = await query('SELECT perfil FROM usuarios WHERE id = $1', [usuarioId]);
+    if (usuarioResult.rows.length > 0) {
+      const perfil = usuarioResult.rows[0].perfil;
+      if (perfil === 'psicologo_externo') {
+        deveDescontarEstoque = false;
+        console.log(`ℹ️ Usuário é psicólogo externo - estoque não será descontado para teste ${tipo}`);
+      }
+    }
+  }
+
+  // Descontar estoque se habilitado e usuário não for psicólogo externo
+  if (deveDescontarEstoque && usuarioId) {
     console.log(`📦 Descontando estoque para teste ${tipo}...`);
     const resultadoEstoque = await descontarEstoqueTeste(tipo, avaliacaoId, usuarioId);
     if (resultadoEstoque.success) {
@@ -657,8 +840,8 @@ async function salvarResultadoTeste(tipo, avaliacaoId, dados, resultado, descont
     } else {
       console.log(`⚠️ Não foi possível descontar estoque: ${resultadoEstoque.message}`);
     }
-  } else if (!descontarEstoque) {
-    console.log(`ℹ️ Desconto de estoque desabilitado pelo usuário para teste ${tipo}`);
+  } else if (!deveDescontarEstoque) {
+    console.log(`ℹ️ Desconto de estoque desabilitado para teste ${tipo} (psicólogo externo ou desabilitado pelo usuário)`);
   }
 }
 
@@ -716,16 +899,36 @@ async function calcularBetaIII(tabelaId, dados) {
 }
 
 async function calcularBPA2(tabelaId, dados) {
+  console.log('📊 BPA2: Iniciando cálculo', { tabelaId, dados });
+  
   const { 
     acertos_sustentada, erros_sustentada, omissoes_sustentada,
     acertos_alternada, erros_alternada, omissoes_alternada,
     acertos_dividida, erros_dividida, omissoes_dividida
   } = dados;
 
+  // Validar dados
+  if (!tabelaId) {
+    throw new Error('tabelaId é obrigatório para calcular BPA-2');
+  }
+
+  // Converter para números e garantir que não sejam undefined/null
+  const acertos_s = Number(acertos_sustentada) || 0;
+  const erros_s = Number(erros_sustentada) || 0;
+  const omissoes_s = Number(omissoes_sustentada) || 0;
+  const acertos_a = Number(acertos_alternada) || 0;
+  const erros_a = Number(erros_alternada) || 0;
+  const omissoes_a = Number(omissoes_alternada) || 0;
+  const acertos_d = Number(acertos_dividida) || 0;
+  const erros_d = Number(erros_dividida) || 0;
+  const omissoes_d = Number(omissoes_dividida) || 0;
+
   // Calcular pontos para cada modalidade (acertos - erros - omissões)
-  const pontos_sustentada = acertos_sustentada - erros_sustentada - omissoes_sustentada;
-  const pontos_alternada = acertos_alternada - erros_alternada - omissoes_alternada;
-  const pontos_dividida = acertos_dividida - erros_dividida - omissoes_dividida;
+  const pontos_sustentada = acertos_s - erros_s - omissoes_s;
+  const pontos_alternada = acertos_a - erros_a - omissoes_a;
+  const pontos_dividida = acertos_d - erros_d - omissoes_d;
+  
+  console.log('🧮 BPA2: Pontos calculados', { pontos_sustentada, pontos_alternada, pontos_dividida });
 
   // Calcular média geral (atenção geral)
   const pontos_geral = (pontos_sustentada + pontos_alternada + pontos_dividida) / 3;
@@ -776,17 +979,28 @@ async function calcularBPA2(tabelaId, dados) {
   };
 
   // Atenção Geral (média dos percentis)
-  const percentil_geral = Math.round((resultados.sustentada.percentil + resultados.alternada.percentil + resultados.dividida.percentil) / 3);
+  // Verificar se todos os percentis existem antes de calcular a média
+  const percentis = [
+    resultados.sustentada.percentil,
+    resultados.alternada.percentil,
+    resultados.dividida.percentil
+  ].filter(p => p !== null && p !== undefined);
   
-  // Determinar classificação geral baseada no percentil médio
-  let classificacao_geral;
-  if (percentil_geral >= 95) classificacao_geral = 'Superior';
-  else if (percentil_geral >= 85) classificacao_geral = 'Acima da Média';
-  else if (percentil_geral >= 75) classificacao_geral = 'Média Superior';
-  else if (percentil_geral >= 50) classificacao_geral = 'Média';
-  else if (percentil_geral >= 25) classificacao_geral = 'Média Inferior';
-  else if (percentil_geral >= 15) classificacao_geral = 'Abaixo da Média';
-  else classificacao_geral = 'Inferior';
+  let percentil_geral = null;
+  let classificacao_geral = 'Fora da faixa normativa';
+  
+  if (percentis.length > 0) {
+    percentil_geral = Math.round(percentis.reduce((a, b) => a + b, 0) / percentis.length);
+    
+    // Determinar classificação geral baseada no percentil médio
+    if (percentil_geral >= 95) classificacao_geral = 'Superior';
+    else if (percentil_geral >= 85) classificacao_geral = 'Acima da Média';
+    else if (percentil_geral >= 75) classificacao_geral = 'Média Superior';
+    else if (percentil_geral >= 50) classificacao_geral = 'Média';
+    else if (percentil_geral >= 25) classificacao_geral = 'Média Inferior';
+    else if (percentil_geral >= 15) classificacao_geral = 'Abaixo da Média';
+    else classificacao_geral = 'Inferior';
+  }
 
   resultados.geral = {
     pontos: Math.round(pontos_geral * 100) / 100, // Arredondar para 2 casas decimais

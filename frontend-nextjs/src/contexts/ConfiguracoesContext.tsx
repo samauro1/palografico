@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { configuracoesService } from '@/services/api';
+import { useAuth } from './AuthContext';
 
 interface ConfiguracoesClinica {
   nome_clinica?: string;
@@ -32,6 +33,7 @@ export const useConfiguracoes = () => useContext(ConfiguracoesContext);
 export const ConfiguracoesProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [configuracoes, setConfiguracoes] = useState<ConfiguracoesClinica | null>(null);
   const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
 
   const carregarConfiguracoes = async () => {
     try {
@@ -47,8 +49,13 @@ export const ConfiguracoesProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   useEffect(() => {
-    carregarConfiguracoes();
-  }, []);
+    // Só carregar configurações se o usuário estiver autenticado
+    if (user) {
+      carregarConfiguracoes();
+    } else {
+      setLoading(false);
+    }
+  }, [user]);
 
   const recarregarConfiguracoes = () => {
     carregarConfiguracoes();

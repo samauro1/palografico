@@ -29,16 +29,16 @@ interface AuthProviderProps {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [verifying, setVerifying] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const token = localStorage.getItem('token');
-      if (token) {
+      if (token && !user) {
         verifyToken();
       } else {
-        // Auto-login para desenvolvimento
-        autoLogin();
+        setLoading(false);
       }
     } else {
       setLoading(false);
@@ -47,7 +47,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const autoLogin = async () => {
     try {
-      // Tentar fazer login automático com usuário padrão
       const response = await api.post('/auth/login', { 
         email: 'admin@teste.com', 
         senha: '123456' 
@@ -56,18 +55,25 @@ export function AuthProvider({ children }: AuthProviderProps) {
       
       localStorage.setItem('token', token);
       setUser(user);
-      console.log('✅ Login automático realizado com sucesso');
     } catch (error) {
-      console.log('⚠️ Login automático falhou, usuário precisa fazer login manual');
+      // Login automático falhou
     } finally {
       setLoading(false);
     }
   };
 
   const verifyToken = async () => {
+    if (verifying) {
+      return;
+    }
+    
+    setVerifying(true);
+    setLoading(true);
+    
     try {
       const response = await api.get('/auth/verify');
-      setUser(response.data.data || response.data.user);
+      const userData = response.data.data || response.data.user;
+      setUser(userData);
     } catch (error: unknown) {
       console.error('Erro ao verificar token:', error);
       if (typeof window !== 'undefined') {
@@ -76,6 +82,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(null);
     } finally {
       setLoading(false);
+      setVerifying(false);
     }
   };
 
@@ -92,6 +99,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       toast.success('Login realizado com sucesso!');
       return { success: true };
     } catch (error: unknown) {
+      console.error('Erro no login:', error);
       const message = (error as { response?: { data?: { error?: string } } }).response?.data?.error || 'Erro ao fazer login';
       toast.error(message);
       return { success: false, error: message };
@@ -117,12 +125,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
     if (typeof window !== 'undefined') {
+      try {
+        // Chamar rota de logout no backend para registrar log
+        await api.post('/auth/logout');
+      } catch (error) {
+        console.warn('Erro ao registrar logout no servidor:', error);
+      }
+      
       localStorage.removeItem('token');
+      toast.success('Logout realizado com sucesso!');
+      // Fazer refresh completo e redirecionar para login
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 1000);
     }
     setUser(null);
-    toast.success('Logout realizado com sucesso!');
   };
 
   const value: AuthContextType = {

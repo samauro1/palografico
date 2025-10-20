@@ -52,7 +52,65 @@ const generateToken = (userId) => {
   );
 };
 
+// Middleware para verificar se o usuário é administrador
+const requireAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Usuário não autenticado' });
+  }
+
+  if (req.user.perfil !== 'administrador') {
+    return res.status(403).json({ 
+      error: 'Acesso negado',
+      message: 'Apenas administradores podem acessar este recurso'
+    });
+  }
+
+  next();
+};
+
+// Middleware para verificar perfis permitidos
+const requirePerfil = (...perfisPermitidos) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Usuário não autenticado' });
+    }
+
+    if (!perfisPermitidos.includes(req.user.perfil)) {
+      return res.status(403).json({ 
+        error: 'Acesso negado',
+        message: `Acesso permitido apenas para: ${perfisPermitidos.join(', ')}`
+      });
+    }
+
+    next();
+  };
+};
+
+// Função helper para verificar se o usuário é admin
+const isAdmin = (user) => {
+  return user && user.perfil === 'administrador';
+};
+
+// Função helper para filtrar queries por usuário (exceto admin)
+const addUserFilter = (user, baseQuery, params = []) => {
+  if (isAdmin(user)) {
+    // Admin vê tudo
+    return { query: baseQuery, params };
+  }
+
+  // Outros perfis veem apenas seus próprios dados
+  const userFilter = ' AND usuario_id = $' + (params.length + 1);
+  return {
+    query: baseQuery + userFilter,
+    params: [...params, user.id]
+  };
+};
+
 module.exports = {
   authenticateToken,
-  generateToken
+  generateToken,
+  requireAdmin,
+  requirePerfil,
+  isAdmin,
+  addUserFilter
 };

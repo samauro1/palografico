@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { query } = require('../config/database');
-const { generateToken } = require('../middleware/auth');
+const { generateToken, authenticateToken } = require('../middleware/auth');
 const { validate, userSchema, loginSchema } = require('../middleware/validation');
 
 const router = express.Router();
@@ -91,20 +91,30 @@ router.post('/login', validate(loginSchema), async (req, res) => {
 
     const token = generateToken(user.id);
 
-    res.json({
-      message: 'Login realizado com sucesso',
-      user: {
-        id: user.id,
-        nome: user.nome,
-        email: user.email,
-        ativo: user.ativo,
-        foto_url: user.foto_url,
-        perfil: user.perfil,
-        crp: user.crp,
-        especialidade: user.especialidade
-      },
-      token
-    });
+        // Registrar log de login
+        try {
+          await query(`
+            INSERT INTO logs_sistema (tipo, descricao, usuario_id, ip_address)
+            VALUES ('login', 'Usuário fez login no sistema', $1, $2)
+          `, [user.id, req.ip || req.connection.remoteAddress]);
+        } catch (logError) {
+          console.warn('Não foi possível registrar log de login:', logError.message);
+        }
+
+        res.json({
+          message: 'Login realizado com sucesso',
+          user: {
+            id: user.id,
+            nome: user.nome,
+            email: user.email,
+            ativo: user.ativo,
+            foto_url: user.foto_url,
+            perfil: user.perfil,
+            crp: user.crp,
+            especialidade: user.especialidade
+          },
+          token
+        });
   } catch (error) {
     console.error('Erro ao fazer login:', error);
     res.status(500).json({
@@ -174,6 +184,30 @@ router.get('/verify', async (req, res) => {
     }
 
     console.error('Erro ao verificar token:', error);
+    res.status(500).json({
+      error: 'Erro interno do servidor'
+    });
+  }
+});
+
+// Logout
+router.post('/logout', authenticateToken, async (req, res) => {
+  try {
+    // Registrar log de logout
+    try {
+      await query(`
+        INSERT INTO logs_sistema (tipo, descricao, usuario_id, ip_address)
+        VALUES ('logout', 'Usuário fez logout do sistema', $1, $2)
+      `, [req.user.id, req.ip || req.connection.remoteAddress]);
+    } catch (logError) {
+      console.warn('Não foi possível registrar log de logout:', logError.message);
+    }
+
+    res.json({
+      message: 'Logout realizado com sucesso'
+    });
+  } catch (error) {
+    console.error('Erro ao fazer logout:', error);
     res.status(500).json({
       error: 'Erro interno do servidor'
     });

@@ -13,10 +13,33 @@ export function cleanPhone(phone: string): string {
 
 /**
  * Formata o telefone para exibição visual (11) 99999-9999
- * @param phone - Telefone limpo (apenas números)
- * @returns Telefone formatado para exibição
+ * Suporta múltiplos telefones separados por /
+ * @param phone - Telefone com ou sem formatação, pode conter múltiplos separados por /
+ * @returns Telefone(s) formatado(s) para exibição
  */
 export function formatPhoneDisplay(phone: string): string {
+  if (!phone) return '';
+  
+  // Se tem barra (/), processar múltiplos telefones
+  if (phone.includes('/')) {
+    const telefones = phone.split('/').map(t => t.trim());
+    return telefones.map(tel => {
+      const cleaned = cleanPhone(tel);
+      
+      if (cleaned.length === 11) {
+        return `(${cleaned.slice(0, 2)}) ${cleaned.slice(2, 7)}-${cleaned.slice(7)}`;
+      } else if (cleaned.length === 10) {
+        return `(${cleaned.slice(0, 2)}) ${cleaned.slice(2, 6)}-${cleaned.slice(6)}`;
+      } else if (cleaned.length >= 8) {
+        // Telefone sem DDD: 9999-9999
+        return `${cleaned.slice(0, 4)}-${cleaned.slice(4, 8)}`;
+      }
+      
+      return tel; // Retorna original se não conseguir formatar
+    }).join('\n'); // Quebra de linha entre telefones
+  }
+  
+  // Telefone único
   const cleaned = cleanPhone(phone);
   
   if (cleaned.length === 11) {

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useConfiguracoes } from '@/contexts/ConfiguracoesContext';
+import { useTheme } from '@/contexts/ThemeContext';
 import Logo from './Logo';
 import {
   LayoutDashboard,
@@ -17,7 +18,10 @@ import {
   Menu,
   X,
   LogOut,
-  User
+  User,
+  Sun,
+  Moon,
+  Calendar
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -28,11 +32,13 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
   const { configuracoes } = useConfiguracoes();
+  const { isDark, toggleTheme } = useTheme();
   const pathname = usePathname();
 
   const navigation = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-    { name: 'Pacientes e Avaliações', href: '/pacientes', icon: Users },
+    { name: 'Agenda', href: '/agenda', icon: Calendar },
+    { name: 'Avaliados e Avaliações', href: '/pacientes', icon: Users },
     { name: 'Testes', href: '/testes', icon: TestTube },
     { name: 'Estoque', href: '/estoque', icon: Package },
     { name: 'Relatórios', href: '/relatorios', icon: BarChart3 },
@@ -44,11 +50,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className={`min-h-screen ${isDark ? 'bg-dark-950' : 'bg-gray-50'}`}>
       {/* Mobile sidebar */}
       <div className={`fixed inset-0 z-50 lg:hidden ${sidebarOpen ? 'block' : 'hidden'}`}>
         <div className="fixed inset-0 bg-gray-600 bg-opacity-75" onClick={() => setSidebarOpen(false)} />
-        <div className="fixed inset-y-0 left-0 flex w-64 flex-col bg-white">
+        <div className={`fixed inset-y-0 left-0 flex w-64 flex-col ${isDark ? 'bg-dark-900' : 'bg-white'}`}>
           <div className="flex h-16 items-center justify-between px-4">
             <div className="flex items-center gap-3">
               {configuracoes?.logo_url ? (
@@ -79,8 +85,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   onClick={() => setSidebarOpen(false)}
                   className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
                     isActive(item.href)
-                      ? 'bg-blue-100 text-blue-900'
-                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      ? isDark 
+                        ? 'bg-blue-600 text-white' 
+                        : 'bg-blue-100 text-blue-900'
+                      : isDark
+                        ? 'text-dark-200 hover:bg-dark-700 hover:text-white'
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                   }`}
                 >
                   <Icon className="mr-3 h-5 w-5" />
@@ -120,7 +130,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       {/* Desktop sidebar */}
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
-        <div className="flex flex-col flex-grow bg-white border-r border-gray-200">
+        <div className={`flex flex-col flex-grow ${isDark ? 'bg-dark-900 border-dark-700' : 'bg-white border-gray-200'} border-r`}>
           <div className="flex h-16 items-center px-4">
             <div className="flex items-center gap-3">
               {configuracoes?.logo_url ? (
@@ -144,8 +154,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                   href={item.href}
                   className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
                     isActive(item.href)
-                      ? 'bg-blue-100 text-blue-900'
-                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      ? isDark 
+                        ? 'bg-blue-600 text-white' 
+                        : 'bg-blue-100 text-blue-900'
+                      : isDark
+                        ? 'text-dark-200 hover:bg-dark-700 hover:text-white'
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                   }`}
                 >
                   <Icon className="mr-3 h-5 w-5" />
@@ -186,10 +200,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       {/* Main content */}
       <div className="lg:pl-64">
         {/* Top bar */}
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b border-gray-200 bg-white px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8">
+        <div className={`sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-4 border-b ${isDark ? 'border-dark-700 bg-dark-900' : 'border-gray-200 bg-white'} px-4 shadow-sm sm:gap-x-6 sm:px-6 lg:px-8`}>
           <button
             type="button"
-            className="-m-2.5 p-2.5 text-gray-700 lg:hidden"
+            className={`-m-2.5 p-2.5 ${isDark ? 'text-dark-200' : 'text-gray-700'} lg:hidden`}
             onClick={() => setSidebarOpen(true)}
           >
             <Menu className="h-6 w-6" />
@@ -197,8 +211,21 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6">
             <div className="flex flex-1" />
             <div className="flex items-center gap-x-4 lg:gap-x-6">
-              <div className="hidden lg:block lg:h-6 lg:w-px lg:bg-gray-200" />
+              <div className={`hidden lg:block lg:h-6 lg:w-px ${isDark ? 'lg:bg-dark-600' : 'lg:bg-gray-200'}`} />
               <div className="flex items-center gap-x-3">
+                {/* Botão de Tema */}
+                <button
+                  onClick={toggleTheme}
+                  className={`p-2 rounded-lg transition-colors ${isDark ? 'bg-dark-700 hover:bg-dark-600' : 'bg-gray-100 hover:bg-gray-200'}`}
+                  title={isDark ? 'Modo Claro' : 'Modo Escuro'}
+                >
+                  {isDark ? (
+                    <Sun className="h-5 w-5 text-yellow-500" />
+                  ) : (
+                    <Moon className="h-5 w-5 text-gray-600" />
+                  )}
+                </button>
+                
                 {user?.foto_url ? (
                   <img 
                     src={user.foto_url} 
@@ -210,14 +237,14 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                     <User className="h-6 w-6 text-blue-600" />
                   </div>
                 )}
-                <span className="text-sm text-gray-700">Bem-vindo, {user?.nome}</span>
+                <span className={`text-sm ${isDark ? 'text-dark-200' : 'text-gray-700'}`}>Bem-vindo, {user?.nome}</span>
               </div>
             </div>
           </div>
         </div>
 
         {/* Page content */}
-        <main className="py-6">
+        <main className={`py-6 ${isDark ? 'bg-dark-950' : 'bg-gray-50'}`}>
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             {children}
           </div>
