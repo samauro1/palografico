@@ -2,6 +2,7 @@ const express = require('express');
 const { query } = require('../config/database');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
 const { validate, pacienteSchema } = require('../middleware/validation');
+const RenachProcessor = require('../utils/renachProcessor');
 
 const router = express.Router();
 
@@ -43,6 +44,11 @@ router.get('/', async (req, res) => {
         p.id, p.nome, p.cpf, p.idade, p.data_nascimento, p.numero_laudo, p.contexto, 
         p.tipo_transito, p.escolaridade, p.telefone, p.email, p.endereco, p.observacoes, 
         p.created_at, p.updated_at,
+        p.numero_renach, p.sexo, p.categoria_cnh, p.nome_pai, p.nome_mae, 
+        p.naturalidade, p.nacionalidade, p.rg, p.orgao_expedidor_rg, p.uf_rg, 
+        p.tipo_documento_rg, p.resultado_exame, p.data_exame, p.numero_laudo_renach, 
+        p.crp_renach, p.credenciado_renach, p.regiao_renach,
+        p.logradouro, p.numero_endereco, p.bairro, p.cep, p.municipio,
         (
           SELECT aptidao 
           FROM avaliacoes 
@@ -83,7 +89,14 @@ router.get('/:id', async (req, res) => {
     const { id } = req.params;
 
     // Montar query com filtro de usuário se não for admin
-    let queryText = 'SELECT id, nome, cpf, idade, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, created_at, updated_at, usuario_id FROM pacientes WHERE id = $1';
+    let queryText = `SELECT id, nome, cpf, idade, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, 
+                     created_at, updated_at, usuario_id,
+                     numero_renach, sexo, categoria_cnh, nome_pai, nome_mae, 
+                     naturalidade, nacionalidade, rg, orgao_expedidor_rg, uf_rg, 
+                     tipo_documento_rg, resultado_exame, data_exame, numero_laudo_renach, 
+                     crp_renach, credenciado_renach, regiao_renach,
+                     logradouro, numero_endereco, bairro, cep, municipio
+                     FROM pacientes WHERE id = $1`;
     let queryParams = [id];
 
     if (!isAdmin(req.user)) {
@@ -127,6 +140,40 @@ router.post('/', validate(pacienteSchema), async (req, res) => {
     if (observacoes === '' || observacoes === undefined) observacoes = null;
 
     console.log('📝 Dados recebidos:', { nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes });
+    
+    // Processar múltiplos telefones se necessário
+    let telefonesProcessados = telefone;
+    if (telefone && (telefone.includes(' ') || telefone.includes('/')) && !telefone.includes('(')) {
+      // Detecta formatos "2345-6854 9484-3428" ou "2345-6854 / 9484-3428"
+      console.log('📱 Detectado múltiplos telefones:', telefone);
+      
+      let telefones = [];
+      
+      // Se tem barra, dividir por barra
+      if (telefone.includes('/')) {
+        telefones = telefone.split('/').map(tel => tel.trim());
+      } else {
+        // Se tem espaço, dividir por espaço
+        telefones = telefone.split(' ').map(tel => tel.trim());
+      }
+      
+      const telefonesProcessados = telefones.map(tel => {
+        const numerico = tel.replace(/\D/g, '');
+        // Se tem 8 dígitos, adiciona DDD 11
+        if (numerico.length === 8) {
+          return `11${numerico}`;
+        }
+        // Se tem 9 dígitos, adiciona DDD 11  
+        if (numerico.length === 9) {
+          return `11${numerico}`;
+        }
+        return numerico;
+      }).filter(tel => tel.length >= 8);
+      
+      // Salva como JSON string para múltiplos telefones
+      telefonesProcessados = JSON.stringify(telefonesProcessados);
+      console.log('📱 Telefones processados:', telefonesProcessados);
+    }
 
     // Verificar se o CPF já existe
     const existingPaciente = await query(
@@ -248,7 +295,7 @@ router.post('/', validate(pacienteSchema), async (req, res) => {
 
     const result = await query(
       'INSERT INTO pacientes (nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, usuario_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, usuario_id, created_at, updated_at',
-      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, usuarioId]
+      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefonesProcessados, email, endereco, observacoes, usuarioId]
     );
 
     console.log(`✅ Paciente criado e atribuído ao usuário ID ${usuarioId}`);
@@ -356,9 +403,43 @@ router.put('/:id', validate(pacienteSchema), async (req, res) => {
       }
     }
 
+    // Processar múltiplos telefones se necessário
+    let telefonesProcessados = telefone;
+    if (telefone && (telefone.includes(' ') || telefone.includes('/')) && !telefone.includes('(')) {
+      // Detecta formatos "2345-6854 9484-3428" ou "2345-6854 / 9484-3428"
+      console.log('📱 Detectado múltiplos telefones na atualização:', telefone);
+      
+      let telefones = [];
+      
+      // Se tem barra, dividir por barra
+      if (telefone.includes('/')) {
+        telefones = telefone.split('/').map(tel => tel.trim());
+      } else {
+        // Se tem espaço, dividir por espaço
+        telefones = telefone.split(' ').map(tel => tel.trim());
+      }
+      
+      const telefonesProcessados = telefones.map(tel => {
+        const numerico = tel.replace(/\D/g, '');
+        // Se tem 8 dígitos, adiciona DDD 11
+        if (numerico.length === 8) {
+          return `11${numerico}`;
+        }
+        // Se tem 9 dígitos, adiciona DDD 11  
+        if (numerico.length === 9) {
+          return `11${numerico}`;
+        }
+        return numerico;
+      }).filter(tel => tel.length >= 8);
+      
+      // Salva como JSON string para múltiplos telefones
+      telefonesProcessados = JSON.stringify(telefonesProcessados);
+      console.log('📱 Telefones processados na atualização:', telefonesProcessados);
+    }
+
     const result = await query(
       'UPDATE pacientes SET nome = $1, cpf = $2, data_nascimento = $3, numero_laudo = $4, contexto = $5, tipo_transito = $6, escolaridade = $7, telefone = $8, email = $9, endereco = $10, observacoes = $11, updated_at = CURRENT_TIMESTAMP WHERE id = $12 RETURNING id, nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, created_at, updated_at',
-      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefone, email, endereco, observacoes, id]
+      [nome, cpf, data_nascimento, numero_laudo, contexto, tipo_transito, escolaridade, telefonesProcessados, email, endereco, observacoes, id]
     );
 
     res.json({
@@ -419,6 +500,204 @@ router.delete('/:id', async (req, res) => {
     console.error('Erro ao deletar paciente:', error);
     res.status(500).json({
       error: 'Erro interno do servidor'
+    });
+  }
+});
+
+// Upload de arquivo RENACH (PDF em base64)
+router.put('/:id/renach', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { renach_arquivo } = req.body;
+
+    // Verificar permissão
+    if (!isAdmin(req.user)) {
+      const paciente = await query(
+        'SELECT usuario_id FROM pacientes WHERE id = $1',
+        [id]
+      );
+      
+      if (paciente.rows.length === 0) {
+        return res.status(404).json({ error: 'Paciente não encontrado' });
+      }
+      
+      if (paciente.rows[0].usuario_id !== req.user.id) {
+        return res.status(403).json({ error: 'Sem permissão para atualizar este paciente' });
+      }
+    }
+
+    // Processar RENACH para extrair dados automaticamente
+    const processor = new RenachProcessor();
+    const processResult = await processor.processRenach(renach_arquivo);
+    
+    console.log('📊 Resultado do processamento:', {
+      success: processResult.success,
+      hasFoto: !!processResult.data?.foto,
+      fotoLength: processResult.data?.foto?.length,
+      dataKeys: Object.keys(processResult.data || {})
+    });
+    
+    let renach_foto = null;
+    let extractedData = {};
+    
+    if (processResult.success) {
+      renach_foto = processResult.data.foto;
+      extractedData = processResult.data;
+      
+      console.log('✅ RENACH foto extraída:', renach_foto ? `Sim (${renach_foto.substring(0, 50)}...)` : 'Não');
+      
+      // Atualizar dados do paciente com informações extraídas
+      if (Object.keys(extractedData).length > 0) {
+        const updateFields = [];
+        const updateValues = [];
+        let paramCount = 1;
+        
+        // Buscar dados atuais do paciente para evitar sobrescrever
+        const currentPatient = await query(
+          'SELECT cpf, nome FROM pacientes WHERE id = $1',
+          [id]
+        );
+        
+        // Mapear todos os campos extraídos para colunas do banco
+        // Não atualizar CPF ou nome se já existirem
+        const fieldMapping = {
+          numero_renach: 'numero_renach',
+          // nome: 'nome', // Comentado: não sobrescrever nome existente
+          // cpf: 'cpf', // Comentado: não sobrescrever CPF existente
+          data_nascimento: 'data_nascimento',
+          sexo: 'sexo',
+          categoria_cnh: 'categoria_cnh',
+          nome_pai: 'nome_pai',
+          nome_mae: 'nome_mae',
+          naturalidade: 'naturalidade',
+          nacionalidade: 'nacionalidade',
+          logradouro: 'logradouro',
+          numero_endereco: 'numero_endereco',
+          bairro: 'bairro',
+          cep: 'cep',
+          municipio: 'municipio',
+          resultado_exame: 'resultado_exame',
+          data_exame: 'data_exame',
+          numero_laudo_renach: 'numero_laudo_renach',
+          crp_renach: 'crp_renach',
+          credenciado_renach: 'credenciado_renach',
+          regiao_renach: 'regiao_renach',
+          rg: 'rg',
+          orgao_expedidor_rg: 'orgao_expedidor_rg',
+          uf_rg: 'uf_rg',
+          tipo_documento_rg: 'tipo_documento_rg'
+        };
+        
+        // Adicionar campos que existem nos dados extraídos
+        for (const [extractedField, dbField] of Object.entries(fieldMapping)) {
+          if (extractedData[extractedField]) {
+            updateFields.push(`${dbField} = $${paramCount++}`);
+            updateValues.push(extractedData[extractedField]);
+          }
+        }
+        
+        // Atualizar endereço completo se temos dados de endereço
+        if (extractedData.logradouro || extractedData.bairro || extractedData.municipio) {
+          const enderecoCompleto = [
+            extractedData.logradouro,
+            extractedData.numero_endereco,
+            extractedData.bairro,
+            extractedData.municipio,
+            extractedData.cep
+          ].filter(Boolean).join(', ');
+          
+          if (enderecoCompleto) {
+            updateFields.push(`endereco = $${paramCount++}`);
+            updateValues.push(enderecoCompleto);
+          }
+        }
+        
+        if (updateFields.length > 0) {
+          updateValues.push(id);
+          await query(
+            `UPDATE pacientes SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $${paramCount}`,
+            updateValues
+          );
+        }
+      }
+    }
+
+    // Salvar RENACH no banco
+    console.log('💾 Salvando RENACH:', {
+      arquivoLength: renach_arquivo?.length,
+      fotoLength: renach_foto?.length,
+      pacienteId: id
+    });
+    
+    await query(
+      `UPDATE pacientes 
+       SET renach_arquivo = $1, 
+           renach_foto = $2,
+           renach_data_upload = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP 
+       WHERE id = $3`,
+      [renach_arquivo, renach_foto, id]
+    );
+    
+    console.log('✅ RENACH salvo no banco com sucesso!');
+
+    res.json({
+      message: 'Arquivo RENACH salvo com sucesso',
+      data: {
+        renach_data_upload: new Date(),
+        extracted_data: extractedData,
+        processing_success: processResult.success
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erro ao salvar arquivo RENACH:', error);
+    console.error('❌ Stack trace:', error.stack);
+    console.error('❌ Mensagem:', error.message);
+    res.status(500).json({
+      error: 'Erro ao salvar arquivo RENACH',
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// Obter arquivo RENACH
+router.get('/:id/renach', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verificar permissão
+    if (!isAdmin(req.user)) {
+      const paciente = await query(
+        'SELECT usuario_id FROM pacientes WHERE id = $1',
+        [id]
+      );
+      
+      if (paciente.rows.length === 0) {
+        return res.status(404).json({ error: 'Paciente não encontrado' });
+      }
+      
+      if (paciente.rows[0].usuario_id !== req.user.id) {
+        return res.status(403).json({ error: 'Sem permissão para visualizar este paciente' });
+      }
+    }
+
+    const result = await query(
+      'SELECT renach_arquivo, renach_foto, renach_data_upload FROM pacientes WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Paciente não encontrado' });
+    }
+
+    res.json({
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Erro ao buscar arquivo RENACH:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar arquivo RENACH'
     });
   }
 });

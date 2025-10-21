@@ -96,6 +96,13 @@ export const configuracoesService = {
     api.get('/configuracoes/logs', { params }),
   registrarLog: (tipo: string, descricao: string) => 
     api.post('/configuracoes/log', { tipo, descricao }),
+  // Notificações
+  getNotificacoes: () => api.get('/configuracoes/notificacoes'),
+  updateNotificacoes: (data: any) => api.put('/configuracoes/notificacoes', data),
+  // E-mail
+  getEmail: () => api.get('/configuracoes/email'),
+  updateEmail: (data: any) => api.put('/configuracoes/email', data),
+  testEmail: (data: any) => api.post('/configuracoes/email/test', data),
 };
 
 export const pacientesService = {
@@ -104,6 +111,9 @@ export const pacientesService = {
   create: (data: Partial<Patient>) => api.post<ApiResponse<Patient>>('/pacientes', data),
   update: (id: string, data: Partial<Patient>) => api.put<ApiResponse<Patient>>(`/pacientes/${id}`, data),
   delete: (id: string) => api.delete<ApiResponse>(`/pacientes/${id}`),
+  uploadRenach: (id: string, data: { renach_arquivo: string; renach_foto?: string }) => 
+    api.put<ApiResponse>(`/pacientes/${id}/renach`, data),
+  getRenach: (id: string) => api.get<ApiResponse>(`/pacientes/${id}/renach`),
 };
 
 export const avaliacoesService = {

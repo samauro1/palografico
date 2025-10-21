@@ -2,16 +2,18 @@
 
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Edit, Trash2, FileText, User, Mail, Eye, Send, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Plus, Search, Edit, Trash2, FileText, User, Mail, Eye, Send, CheckCircle, XCircle, AlertCircle, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { pacientesService, avaliacoesService } from '@/services/api';
+import { pacientesService, avaliacoesService, configuracoesService } from '@/services/api';
 import PhoneInputWithValidation from '@/components/PhoneInputWithValidation';
 import EmailInputWithValidation from '@/components/EmailInputWithValidation';
 import LaudoInput from '@/components/LaudoInput';
 import { formatPhoneDisplay, generateWhatsAppLink } from '@/utils/phoneUtils';
 import { formatDateToBrazilian, calculateAge } from '@/utils/dateUtils';
 import Layout from '@/components/Layout';
+import { useAuth } from '@/contexts/AuthContext';
+import { useConfiguracoes } from '@/contexts/ConfiguracoesContext';
 
 interface Patient {
   id: string;
@@ -29,6 +31,31 @@ interface Patient {
   observacoes?: string;
   created_at: string;
   updated_at: string;
+  // Campos extraídos do RENACH
+  numero_renach?: string;
+  sexo?: string;
+  categoria_cnh?: string;
+  nome_pai?: string;
+  nome_mae?: string;
+  naturalidade?: string;
+  nacionalidade?: string;
+  tipo_documento_rg?: string;
+  rg?: string;
+  orgao_expedidor_rg?: string;
+  uf_rg?: string;
+  resultado_exame?: string;
+  data_exame?: string;
+  numero_laudo_renach?: string;
+  crp_renach?: string;
+  credenciado_renach?: string;
+  regiao_renach?: string;
+  renach_arquivo?: string;
+  renach_foto?: string;
+  logradouro?: string;
+  numero_endereco?: string;
+  bairro?: string;
+  cep?: string;
+  municipio?: string;
 }
 
 interface Avaliacao {
@@ -48,11 +75,16 @@ interface Avaliacao {
 const PacientesPage: React.FC = () => {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { user: currentUser } = useAuth();
+  const { configuracoes } = useConfiguracoes();
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [showPatientDetail, setShowPatientDetail] = useState(false);
   const [allowDuplicatePhone, setAllowDuplicatePhone] = useState(false);
+  const [renachArquivo, setRenachArquivo] = useState<string | null>(null);
+  const [renachFoto, setRenachFoto] = useState<string | null>(null);
+  const [uploadandoRenach, setUploadandoRenach] = useState(false);
   const [allowDuplicateEmail, setAllowDuplicateEmail] = useState(false);
   const [showNewAvaliacao, setShowNewAvaliacao] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -354,6 +386,220 @@ const PacientesPage: React.FC = () => {
     setFormData(prev => ({ ...prev, cpf: formatted }));
   };
 
+  // Função para fazer upload do arquivo RENACH
+  const handleUploadRenach = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedPatient) return;
+
+    // Validar tipo de arquivo
+    if (file.type !== 'application/pdf') {
+      toast.error('Por favor, selecione apenas arquivos PDF');
+      return;
+    }
+
+    // Validar tamanho (máximo 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('Arquivo muito grande. Tamanho máximo: 10MB');
+      return;
+    }
+
+    setUploadandoRenach(true);
+    toast.loading('Processando arquivo RENACH e extraindo dados...');
+
+    try {
+      const reader = new FileReader();
+      
+      reader.onload = async (event) => {
+        const base64 = event.target?.result as string;
+        const base64Data = base64.split(',')[1]; // Remove o prefixo data:application/pdf;base64,
+        
+        // Salvar arquivo no banco e processar
+        const response = await pacientesService.uploadRenach(selectedPatient.id, {
+          renach_arquivo: base64Data
+        });
+        
+        setRenachArquivo(base64Data);
+        
+        // Verificar se houve extração de dados
+        const responseData = response.data?.data;
+        if (responseData?.extracted_data && Object.keys(responseData.extracted_data).length > 0) {
+          const extractedData = responseData.extracted_data;
+          let message = 'Arquivo RENACH processado com sucesso!\n\n';
+          message += 'Dados extraídos automaticamente:\n';
+          
+          if (extractedData.numero_renach) message += `• Número RENACH: ${extractedData.numero_renach}\n`;
+          if (extractedData.nome) message += `• Nome: ${extractedData.nome}\n`;
+          if (extractedData.cpf) message += `• CPF: ${extractedData.cpf}\n`;
+          if (extractedData.data_nascimento) message += `• Data de Nascimento: ${extractedData.data_nascimento}\n`;
+          if (extractedData.sexo) message += `• Sexo: ${extractedData.sexo}\n`;
+          if (extractedData.categoria_cnh) message += `• Categoria CNH: ${extractedData.categoria_cnh}\n`;
+          if (extractedData.resultado_exame) message += `• Resultado Exame: ${extractedData.resultado_exame}\n`;
+          
+          toast.dismiss();
+          toast.success(message, { duration: 8000 });
+          
+          // Recarregar dados do paciente para mostrar as informações extraídas
+          const pacienteResponse = await pacientesService.get(selectedPatient.id);
+          const pacienteData = pacienteResponse.data?.data || pacienteResponse.data;
+          if (pacienteData) {
+            setSelectedPatient(pacienteData);
+          }
+        } else {
+          toast.dismiss();
+          toast.success('Arquivo RENACH salvo com sucesso!');
+        }
+        
+        queryClient.invalidateQueries({ queryKey: ['pacientes'] });
+      };
+      
+      reader.onerror = () => {
+        toast.dismiss();
+        toast.error('Erro ao ler o arquivo');
+        setUploadandoRenach(false);
+      };
+      
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('Erro ao fazer upload do RENACH:', error);
+      toast.dismiss();
+      toast.error('Erro ao salvar arquivo RENACH');
+    } finally {
+      setUploadandoRenach(false);
+    }
+  };
+
+  // Função para enviar resultado via WhatsApp ou E-mail
+  const handleEnviarResultado = async (paciente: Patient, aptidao: string, testesReprovados?: string[]) => {
+    try {
+      // Buscar configurações de notificações do usuário
+      const configResponse = await configuracoesService.getNotificacoes();
+      const config = configResponse.data?.data || {};
+      
+      const metodoEnvio = config.notificacao_metodo || 'whatsapp';
+      
+      // Validar se tem contato
+      if (metodoEnvio === 'whatsapp' && !paciente.telefone) {
+        toast.error('Paciente não possui telefone cadastrado');
+        return;
+      }
+      
+      if (metodoEnvio === 'email' && !paciente.email) {
+        toast.error('Paciente não possui e-mail cadastrado');
+        return;
+      }
+
+      // Nome do psicólogo
+      const nomePsicologo = (currentUser as any)?.nome || 'o psicólogo';
+      
+      // Primeiro nome do paciente
+      const primeiroNome = paciente.nome.split(' ')[0];
+      
+      // Calcular datas
+      const dataReavaliacao = new Date();
+      dataReavaliacao.setDate(dataReavaliacao.getDate() + 30);
+      const dataReaFormatada = dataReavaliacao.toLocaleDateString('pt-BR');
+      
+      const dataLimite = new Date();
+      dataLimite.setDate(dataLimite.getDate() + 30);
+      const dataLimFormatada = dataLimite.toLocaleDateString('pt-BR');
+      
+      const testesTexto = testesReprovados && testesReprovados.length > 0 
+        ? testesReprovados.join(', ')
+        : 'alguns testes';
+      
+      // Selecionar template baseado na aptidão
+      let templateTexto = '';
+      
+      if (aptidao === 'Apto') {
+        templateTexto = config.notificacao_texto_apto || `Prezado(a) {nome}, aqui Psicólogo {psicologo}, e escrevo para informar sobre o resultado de sua avaliação.
+
+Tenho o prazer de comunicar que seu resultado foi APTO, e o mesmo já foi devidamente cadastrado no sistema do DETRAN.
+
+Parabéns pela aprovação!
+
+Estou à disposição para quaisquer dúvidas adicionais.
+
+Atenciosamente,
+{psicologo}`;
+      } 
+      else if (aptidao === 'Inapto Temporário') {
+        templateTexto = config.notificacao_texto_inapto_temporario || `Prezado(a) {nome}, aqui Psicólogo {psicologo}, e escrevo para informar sobre o resultado de sua avaliação.
+
+Após a análise dos testes realizados, seu resultado foi INAPTO TEMPORÁRIO.
+
+Será necessário reavaliar alguns aspectos. Conforme regulamentação, você deverá aguardar um período de 30 dias antes de realizar uma nova avaliação (a partir de {data_reavaliacao}).
+
+Após essa data, entre em contato para agendarmos uma nova avaliação.
+
+Caso não concorde com este resultado, você pode solicitar uma Junta Administrativa junto ao DETRAN. Se optar por este caminho, por gentileza, comunique-me para que possamos reter seu prontuário.
+
+Estou à disposição para quaisquer dúvidas adicionais.
+
+Atenciosamente,
+{psicologo}`;
+      } 
+      else if (aptidao === 'Inapto') {
+        templateTexto = config.notificacao_texto_inapto || `Prezado(a) {nome}, aqui Psicólogo {psicologo}, e escrevo para informar sobre o resultado de sua avaliação.
+
+Após a análise dos testes realizados, seu resultado foi INAPTO.
+
+Conforme regulamentação, caso você não concorde com esta decisão, é possível solicitar uma Junta Administrativa junto ao DETRAN/Poupatempo. O prazo limite para essa solicitação é de 30 dias a partir da data de emissão do resultado (data final: {data_limite}).
+
+Se decidir prosseguir com a Junta, por gentileza, comunique-me para que possamos reter seu prontuário.
+
+Estou à disposição para quaisquer dúvidas adicionais.
+
+Atenciosamente,
+{psicologo}`;
+      }
+      
+      // Processar variáveis no template
+      const mensagem = templateTexto
+        .replace(/{nome}/g, primeiroNome)
+        .replace(/{psicologo}/g, nomePsicologo)
+        .replace(/{testes}/g, testesTexto)
+        .replace(/{data_reavaliacao}/g, dataReaFormatada)
+        .replace(/{data_limite}/g, dataLimFormatada);
+
+      // Enviar por WhatsApp ou E-mail
+      if (metodoEnvio === 'whatsapp') {
+        // Processar múltiplos telefones se necessário
+        let telefonesParaWhatsApp = [];
+        
+        if (paciente.telefone.startsWith('[') && paciente.telefone.endsWith(']')) {
+          // Telefones salvos como JSON
+          try {
+            telefonesParaWhatsApp = JSON.parse(paciente.telefone);
+          } catch (e) {
+            telefonesParaWhatsApp = [paciente.telefone.replace(/\D/g, '')];
+          }
+        } else {
+          // Telefone único
+          telefonesParaWhatsApp = [paciente.telefone.replace(/\D/g, '')];
+        }
+        
+        // Abrir WhatsApp para o primeiro telefone
+        const primeiroTelefone = telefonesParaWhatsApp[0];
+        const whatsappLink = `https://wa.me/55${primeiroTelefone}?text=${encodeURIComponent(mensagem)}`;
+        window.open(whatsappLink, '_blank');
+        
+        if (telefonesParaWhatsApp.length > 1) {
+          toast.success(`📱 WhatsApp aberto para ${paciente.nome} (${telefonesParaWhatsApp.length} telefones disponíveis)`);
+        } else {
+          toast.success(`📱 WhatsApp aberto para ${paciente.nome}`);
+        }
+      } else {
+        const assunto = `Resultado da Avaliação Psicológica - ${aptidao}`;
+        const mailtoLink = `mailto:${paciente.email}?subject=${encodeURIComponent(assunto)}&body=${encodeURIComponent(mensagem)}`;
+        window.open(mailtoLink);
+        toast.success(`📧 Cliente de e-mail aberto para ${paciente.nome}`);
+      }
+      
+    } catch (error) {
+      console.error('Erro ao enviar resultado:', error);
+      toast.error('Erro ao enviar resultado');
+    }
+  };
 
   const resetForm = () => {
     setFormData({
@@ -373,6 +619,29 @@ const PacientesPage: React.FC = () => {
     setAllowDuplicatePhone(false);
     setAllowDuplicateEmail(false);
   };
+
+  // Carregar arquivo RENACH quando abrir detalhes do paciente
+  React.useEffect(() => {
+    if (showPatientDetail && selectedPatient?.id) {
+      const pacienteId = selectedPatient.id;
+      
+      // Buscar RENACH do paciente
+      pacientesService.getRenach(pacienteId)
+        .then(response => {
+          const data = response.data?.data;
+          if (data) {
+            setRenachArquivo(data.renach_arquivo);
+            setRenachFoto(data.renach_foto);
+          }
+        })
+        .catch(error => {
+          console.log('Sem arquivo RENACH para este paciente');
+        });
+    } else {
+      setRenachArquivo(null);
+      setRenachFoto(null);
+    }
+  }, [showPatientDetail, selectedPatient?.id]); // Mudança: usar selectedPatient?.id em vez de selectedPatient
 
   const resetAvaliacaoForm = () => {
     setAvaliacaoData({
@@ -787,10 +1056,7 @@ const PacientesPage: React.FC = () => {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            toast('📧 Funcionalidade de envio será implementada em breve', {
-                              icon: '🚀',
-                              duration: 3000
-                            });
+                            handleEnviarResultado(paciente, (paciente as any).ultima_aptidao);
                           }}
                           className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition-all"
                           title="Enviar Resultado"
@@ -860,12 +1126,43 @@ const PacientesPage: React.FC = () => {
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  Detalhes do Avaliado: {selectedPatient.nome}
-                </h3>
+              <div className="flex justify-between items-start mb-6">
+                <div className="flex items-center gap-4">
+                  {/* Foto do RENACH */}
+                  {renachFoto ? (
+                    <div className="w-24 h-24 rounded-lg overflow-hidden border-2 border-blue-300 shadow-md">
+                      <img 
+                        src={renachFoto} 
+                        alt="Foto do paciente" 
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          console.error('Erro ao carregar imagem:', e);
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-24 h-24 rounded-lg bg-gray-100 border-2 border-dashed border-gray-300 flex items-center justify-center">
+                      <User className="w-12 h-12 text-gray-400" />
+                    </div>
+                  )}
+                  
+                  <div>
+                    <h3 className="text-lg font-medium text-gray-900">
+                      Detalhes do Avaliado
+                    </h3>
+                    <p className="text-2xl font-bold text-blue-600 mt-1">
+                      {selectedPatient.nome}
+                    </p>
+                  </div>
+                </div>
+                
                 <button
-                  onClick={() => setShowPatientDetail(false)}
+                  onClick={() => {
+                    setShowPatientDetail(false);
+                    setRenachArquivo(null);
+                    setRenachFoto(null);
+                  }}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <span className="sr-only">Fechar</span>
@@ -874,6 +1171,168 @@ const PacientesPage: React.FC = () => {
                   </svg>
                 </button>
               </div>
+
+              {/* Upload de RENACH */}
+              <div className="mb-6 bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+                      📄 Documento RENACH (DETRAN)
+                    </h4>
+                    <p className="text-xs text-gray-600 mt-1">
+                      Faça upload do documento RENACH em PDF
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {renachArquivo ? (
+                      <>
+                        <a
+                          href={renachArquivo}
+                          download={`RENACH_${selectedPatient.nome.replace(/\s+/g, '_')}.pdf`}
+                          className="px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-all flex items-center gap-2"
+                        >
+                          <FileText className="w-4 h-4" />
+                          Baixar PDF
+                        </a>
+                        <label className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-all cursor-pointer flex items-center gap-2">
+                          <Upload className="w-4 h-4" />
+                          Substituir
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            onChange={handleUploadRenach}
+                            className="hidden"
+                            disabled={uploadandoRenach}
+                          />
+                        </label>
+                      </>
+                    ) : (
+                      <label className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-all cursor-pointer flex items-center gap-2">
+                        <Upload className="w-4 h-4" />
+                        {uploadandoRenach ? 'Processando...' : 'Fazer Upload'}
+                        <input
+                          type="file"
+                          accept="application/pdf"
+                          onChange={handleUploadRenach}
+                          className="hidden"
+                          disabled={uploadandoRenach}
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Dados extraídos do RENACH */}
+              {selectedPatient.numero_renach && (
+                <div className="mb-6 bg-green-50 border-2 border-green-200 rounded-lg p-4">
+                  <h4 className="font-semibold text-gray-800 flex items-center gap-2 mb-3">
+                    🎯 Dados Extraídos do RENACH
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {selectedPatient.numero_renach && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Número RENACH</label>
+                        <p className="text-sm font-semibold text-green-700">{selectedPatient.numero_renach}</p>
+                      </div>
+                    )}
+                    {selectedPatient.sexo && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Sexo</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.sexo}</p>
+                      </div>
+                    )}
+                    {selectedPatient.categoria_cnh && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Categoria CNH</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.categoria_cnh}</p>
+                      </div>
+                    )}
+                    {selectedPatient.nome_pai && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Nome do Pai</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.nome_pai}</p>
+                      </div>
+                    )}
+                    {selectedPatient.nome_mae && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Nome da Mãe</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.nome_mae}</p>
+                      </div>
+                    )}
+                    {selectedPatient.naturalidade && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Naturalidade</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.naturalidade}</p>
+                      </div>
+                    )}
+                    {selectedPatient.nacionalidade && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Nacionalidade</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.nacionalidade}</p>
+                      </div>
+                    )}
+                    {selectedPatient.resultado_exame && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Resultado do Exame</label>
+                        <p className={`text-sm font-semibold ${
+                          selectedPatient.resultado_exame === 'Apto' ? 'text-green-600' : 'text-red-600'
+                        }`}>
+                          {selectedPatient.resultado_exame}
+                        </p>
+                      </div>
+                    )}
+                    {selectedPatient.data_exame && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Data do Exame</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.data_exame}</p>
+                      </div>
+                    )}
+                    {selectedPatient.numero_laudo_renach && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Número do Laudo</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.numero_laudo_renach}</p>
+                      </div>
+                    )}
+                    {selectedPatient.crp_renach && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">CRP</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.crp_renach}</p>
+                      </div>
+                    )}
+                    {selectedPatient.regiao_renach && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Região</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.regiao_renach}</p>
+                      </div>
+                    )}
+                    {selectedPatient.rg && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">RG</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.rg}</p>
+                      </div>
+                    )}
+                    {selectedPatient.orgao_expedidor_rg && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Órgão Expedidor</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.orgao_expedidor_rg}</p>
+                      </div>
+                    )}
+                    {selectedPatient.uf_rg && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">UF</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.uf_rg}</p>
+                      </div>
+                    )}
+                    {selectedPatient.tipo_documento_rg && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600">Tipo de Documento</label>
+                        <p className="text-sm text-gray-900">{selectedPatient.tipo_documento_rg}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <div className="space-y-4">
@@ -884,7 +1343,36 @@ const PacientesPage: React.FC = () => {
                   <div>
                     <label className="block text-sm font-medium text-gray-700">CPF</label>
                     <p className="mt-1 text-sm text-gray-900">{selectedPatient.cpf}</p>
+                    {selectedPatient.cpf && selectedPatient.numero_renach && (
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ Extraído do RENACH
+                      </p>
+                    )}
                   </div>
+                  {selectedPatient.numero_renach && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">Número RENACH</label>
+                      <p className="mt-1 text-sm text-gray-900 font-semibold text-blue-600">
+                        {selectedPatient.numero_renach}
+                      </p>
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ Extraído do RENACH
+                      </p>
+                    </div>
+                  )}
+                  {selectedPatient.rg && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">RG</label>
+                      <p className="mt-1 text-sm text-gray-900">
+                        {selectedPatient.rg}
+                        {selectedPatient.orgao_expedidor_rg && ` - ${selectedPatient.orgao_expedidor_rg}`}
+                        {selectedPatient.uf_rg && `/${selectedPatient.uf_rg}`}
+                      </p>
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ Extraído do RENACH
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Data de Nascimento</label>
                     <p className="mt-1 text-sm text-gray-900">
@@ -892,7 +1380,23 @@ const PacientesPage: React.FC = () => {
                         `${formatDateToBrazilian(selectedPatient.data_nascimento)} (${calculateAge(selectedPatient.data_nascimento)} anos)` 
                         : '-'}
                     </p>
+                    {selectedPatient.data_nascimento && selectedPatient.numero_renach && (
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ Extraído do RENACH
+                      </p>
+                    )}
                   </div>
+                  {selectedPatient.sexo && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">Sexo</label>
+                      <p className="mt-1 text-sm text-gray-900">
+                        {selectedPatient.sexo}
+                      </p>
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ Extraído do RENACH
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Contexto</label>
                     <p className="mt-1 text-sm text-gray-900">{selectedPatient.contexto || '-'}</p>
@@ -900,6 +1404,15 @@ const PacientesPage: React.FC = () => {
                       <p className="mt-1 text-sm text-gray-600">{selectedPatient.tipo_transito}</p>
                     )}
                   </div>
+                  {selectedPatient.categoria_cnh && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">Categoria Pretendida</label>
+                      <p className="mt-1 text-sm text-gray-900">{selectedPatient.categoria_cnh}</p>
+                      <p className="text-xs text-green-600 mt-1">
+                        ✓ Extraído do RENACH
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Escolaridade</label>
                     <p className="mt-1 text-sm text-gray-900">{selectedPatient.escolaridade || '-'}</p>
